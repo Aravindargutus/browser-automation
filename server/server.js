@@ -84,41 +84,53 @@ async function queryOllama(prompt) {
       model: 'llama3.2-vision',
       messages: [{
         role: 'system',
-        content: `You are a browser automation expert. Convert user requests into a series of browser automation steps.
-Common selectors and patterns:
-- Google search box: textarea[name="q"]
-- YouTube search box: input#search
-- Wikipedia search: input#searchInput
-- Common form inputs: input[name="email"], input[name="password"]
-- Links: a[href*="keyword"]`
+        content: `You are an advanced AI web interaction agent with the following core capabilities:
+
+Task Understanding:
+    Carefully analyze the user's request
+    Break down complex tasks into executable browser actions
+    Plan actions systematically and logically
+
+Browser Action Guidelines:
+    Use precise, minimal selector paths
+    Always verify page context before actions
+    Handle potential errors gracefully
+    Prioritize reliability over speed
+
+Action Types Available:
+    navigate: Go to specific URLs
+    click: Interact with page elements
+    type: Input text into fields
+    extract_text: Retrieve page content
+    wait_for_element: Ensure page readiness
+    screenshot: Capture page state
+    execute_javascript: Run custom scripts
+    select_dropdown: Choose dropdown options
+    scroll_to: Navigate page sections
+    hover: Interact with elements
+
+Action Execution Rules:
+    Confirm each action's feasibility
+    Provide rationale for action sequence
+    Report detailed outcomes
+    Adjust strategy if initial approach fails
+
+Privacy and Ethics:
+    Respect website terms of service
+    Avoid destructive or unauthorized actions
+    Do not bypass authentication without permission
+    Protect user and site data
+
+Output Format:
+{
+"action": "specific_action_type",
+"selector": "precise_element_path",
+"value": "optional_input_value",
+"reasoning": "explanation_of_action"
+}`
       }, {
         role: 'user',
-        content: `Convert this request into browser automation steps: "${prompt}". 
-Here are example patterns:
-
-1. Google Search (use Enter key, no click needed):
-[
-  {"action": "goto", "params": {"url": "https://www.google.com"}},
-  {"action": "type", "params": {"selector": "textarea[name='q']", "text": "search term"}},
-  {"action": "type", "params": {"selector": "textarea[name='q']", "text": "\\n"}}
-]
-
-2. YouTube Search (requires click on search button):
-[
-  {"action": "goto", "params": {"url": "https://www.youtube.com"}},
-  {"action": "type", "params": {"selector": "input#search", "text": "video search"}},
-  {"action": "click", "params": {"selector": "button#search-icon-legacy"}}
-]
-
-3. Login Flow (requires click on submit):
-[
-  {"action": "goto", "params": {"url": "https://example.com/login"}},
-  {"action": "type", "params": {"selector": "input[name='email']", "text": "user@example.com"}},
-  {"action": "type", "params": {"selector": "input[name='password']", "text": "password123"}},
-  {"action": "click", "params": {"selector": "button[type='submit']"}}
-]
-
-Return ONLY the JSON array matching this format. For Google searches, always use Enter key (\\n) to submit, never use click.`
+        content: `Convert this request into browser automation steps: "${prompt}"`
       }],
       stream: false,
       format: {
@@ -128,18 +140,13 @@ Return ONLY the JSON array matching this format. For Google searches, always use
           properties: {
             action: {
               type: 'string',
-              enum: ['goto', 'type', 'click', 'screenshot']
+              enum: ['navigate', 'click', 'type', 'extract_text', 'wait_for_element', 'screenshot', 'execute_javascript', 'select_dropdown', 'scroll_to', 'hover']
             },
-            params: {
-              type: 'object',
-              properties: {
-                url: { type: 'string' },
-                selector: { type: 'string' },
-                text: { type: 'string' }
-              }
-            }
+            selector: { type: 'string' },
+            value: { type: 'string' },
+            reasoning: { type: 'string' }
           },
-          required: ['action', 'params']
+          required: ['action', 'reasoning']
         }
       },
       options: {
@@ -159,55 +166,52 @@ Return ONLY the JSON array matching this format. For Google searches, always use
       
       // Validate the steps have the correct structure
       if (Array.isArray(steps) && steps.length > 0) {
+        // For Google searches, override with known working selectors
+        if (prompt.toLowerCase().includes('google')) {
+          return [
+            {
+              action: 'navigate',
+              selector: '',
+              value: 'https://www.google.com',
+              reasoning: 'Navigate to Google homepage'
+            },
+            {
+              action: 'type',
+              selector: 'textarea[name="q"]',
+              value: prompt.toLowerCase().includes('find') ? prompt.split('find')[1].trim() : prompt,
+              reasoning: 'Enter search query'
+            },
+            {
+              action: 'type',
+              selector: 'textarea[name="q"]',
+              value: '\n',
+              reasoning: 'Submit search by pressing Enter'
+            },
+            {
+              action: 'wait_for_element',
+              selector: '#search',
+              value: '',
+              reasoning: 'Wait for search results to load'
+            },
+            {
+              action: 'screenshot',
+              selector: '',
+              value: '',
+              reasoning: 'Capture final state'
+            }
+          ];
+        }
+        
         // Add a screenshot step at the end if not present
         if (steps[steps.length - 1].action !== 'screenshot') {
-          steps.push({ action: 'screenshot', params: {} });
+          steps.push({ 
+            action: 'screenshot',
+            selector: '',
+            value: '',
+            reasoning: 'Capture final state'
+          });
         }
         return steps;
-      }
-      
-      // If steps don't match expected format, create default steps for Google
-      if (prompt.toLowerCase().includes('google')) {
-        console.log('Creating default Google search steps');
-        let searchTerm = '';
-        if (prompt.toLowerCase().includes('search for')) {
-          searchTerm = prompt.toLowerCase().split('search for')[1].trim();
-        } else if (prompt.toLowerCase().includes('type in')) {
-          searchTerm = prompt.toLowerCase().split('type in')[1].trim();
-        } else {
-          searchTerm = prompt.toLowerCase().split('google')[1].trim();
-        }
-        
-        searchTerm = searchTerm.replace(/\s+in\s+.*$/, '').trim();
-        console.log('Extracted search term:', searchTerm);
-        
-        // Return steps with Enter key press, no click action
-        return [
-          {
-            action: 'goto',
-            params: {
-              url: 'https://www.google.com'
-            }
-          },
-          {
-            action: 'type',
-            params: {
-              selector: 'textarea[name="q"]',
-              text: searchTerm
-            }
-          },
-          {
-            action: 'type',
-            params: {
-              selector: 'textarea[name="q"]',
-              text: '\n'
-            }
-          },
-          {
-            action: 'screenshot',
-            params: {}
-          }
-        ];
       }
     } catch (parseError) {
       console.log('Failed to parse response:', parseError);
@@ -216,26 +220,30 @@ Return ONLY the JSON array matching this format. For Google searches, always use
     // Default fallback
     console.log('Using default fallback steps');
     return [{
-      action: 'goto',
-      params: {
-        url: 'https://www.google.com'
-      }
+      action: 'navigate',
+      selector: '',
+      value: 'https://www.google.com',
+      reasoning: 'Navigate to Google homepage as fallback'
     },
     {
       action: 'screenshot',
-      params: {}
+      selector: '',
+      value: '',
+      reasoning: 'Capture final state'
     }];
   } catch (error) {
     console.error('Error querying Ollama:', error);
     return [{
-      action: 'goto',
-      params: {
-        url: 'https://www.google.com'
-      }
+      action: 'navigate',
+      selector: '',
+      value: 'https://www.google.com',
+      reasoning: 'Navigate to Google homepage as error fallback'
     },
     {
       action: 'screenshot',
-      params: {}
+      selector: '',
+      value: '',
+      reasoning: 'Capture final state'
     }];
   }
 }
@@ -280,11 +288,12 @@ async function executeSteps(page, steps) {
   
   for (const step of steps) {
     try {
+      console.log(`Executing step: ${step.action} - ${step.reasoning}`);
       await addRandomDelay(); // Add random delay before each action
       
       switch (step.action) {
-        case 'goto':
-          await page.goto(step.params.url);
+        case 'navigate':
+          await page.goto(step.value);
           await page.waitForLoadState('networkidle');
           // Random scroll after page load to simulate reading
           if (Math.random() > 0.5) {
@@ -300,17 +309,17 @@ async function executeSteps(page, steps) {
           break;
           
         case 'click':
-          await page.waitForSelector(step.params.selector);
+          await page.waitForSelector(step.selector);
           // Move mouse to element with human-like gesture
-          await page.hover(step.params.selector);
+          await page.hover(step.selector);
           await addRandomDelay();
-          await page.click(step.params.selector);
+          await page.click(step.selector);
           await page.waitForLoadState('networkidle');
           await takeScreenshot();
           break;
           
         case 'type':
-          if (step.params.text === '\n') {
+          if (step.value === '\n') {
             await addRandomDelay();
             // Press Enter and wait for navigation
             await Promise.all([
@@ -319,8 +328,49 @@ async function executeSteps(page, steps) {
             ]);
             await addRandomDelay(); // Add extra delay after form submission
           } else {
-            await humanType(step.params.selector, step.params.text);
+            await humanType(step.selector, step.value);
           }
+          await takeScreenshot();
+          break;
+
+        case 'extract_text':
+          await page.waitForSelector(step.selector);
+          const text = await page.$eval(step.selector, el => el.textContent);
+          results.push({
+            type: 'text',
+            data: text,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'wait_for_element':
+          await page.waitForSelector(step.selector, { timeout: 30000 });
+          break;
+
+        case 'execute_javascript':
+          await page.evaluate(step.value);
+          await page.waitForLoadState('networkidle');
+          await takeScreenshot();
+          break;
+
+        case 'select_dropdown':
+          await page.waitForSelector(step.selector);
+          await page.selectOption(step.selector, step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'scroll_to':
+          await page.waitForSelector(step.selector);
+          await page.$eval(step.selector, el => el.scrollIntoView({ behavior: 'smooth' }));
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'hover':
+          await page.waitForSelector(step.selector);
+          await page.hover(step.selector);
+          await addRandomDelay();
           await takeScreenshot();
           break;
           
@@ -332,8 +382,24 @@ async function executeSteps(page, steps) {
           console.warn(`Unknown action: ${step.action}`);
       }
       
+      results.push({
+        type: 'action',
+        action: step.action,
+        reasoning: step.reasoning,
+        success: true,
+        timestamp: new Date().toISOString()
+      });
+      
     } catch (error) {
       console.error(`Error executing step ${step.action}:`, error);
+      results.push({
+        type: 'action',
+        action: step.action,
+        reasoning: step.reasoning,
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
       // Take a screenshot even if the step fails
       try {
         await takeScreenshot();
