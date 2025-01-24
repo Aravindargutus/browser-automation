@@ -1,5 +1,6 @@
 # Browser Automation Project
-![cover](https://github.com/user-attachments/assets/05365779-ccee-46fc-bfec-0c503784e90e)
+
+![cover](https://github.com/user-attachments/assets/7ebc3b41-2db4-45c8-b790-a39da8d86ed9)
 
 This project provides automated browser interaction capabilities using Playwright and React. It consists of a React frontend and an Express.js backend server that controls browser automation tasks.
 
