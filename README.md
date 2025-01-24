@@ -13,6 +13,7 @@ Key features:
 - Headless Chrome browser control
 - File upload handling
 - Cross-origin resource sharing (CORS) support
+- Uses llama3.2-vision with ollama
 
 ## Prerequisites
 
