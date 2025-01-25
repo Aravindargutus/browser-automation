@@ -20,6 +20,7 @@ Key features:
 - Node.js and npm installed
 - A modern web browser (Chrome recommended)
 - Playwright browser dependencies
+- Ollama with llama3.2-vision 
 
 ## Installation
 
