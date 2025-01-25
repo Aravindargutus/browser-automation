@@ -79,6 +79,94 @@ initBrowser();
 
 async function queryOllama(prompt) {
   try {
+    // Check for Google search first
+    if (prompt.toLowerCase().includes('google')) {
+      console.log('Detected Google search, using optimized steps');
+      const searchTerm = prompt.toLowerCase().includes('find') ? 
+        prompt.split('find')[1].trim() : 
+        prompt.split('google')[1].trim();
+        
+      return [
+        {
+          action: 'navigate',
+          selector: '',
+          value: 'https://www.google.com',
+          reasoning: 'Navigate to Google homepage'
+        },
+        {
+          action: 'type',
+          selector: 'textarea[name="q"]',
+          value: searchTerm,
+          reasoning: 'Enter search query'
+        },
+        {
+          action: 'type',
+          selector: 'textarea[name="q"]',
+          value: '\n',
+          reasoning: 'Submit search by pressing Enter'
+        },
+        {
+          action: 'wait_for_element',
+          selector: '#search',
+          value: '',
+          reasoning: 'Wait for search results to load'
+        },
+        {
+          action: 'screenshot',
+          selector: '',
+          value: '',
+          reasoning: 'Capture final state'
+        }
+      ];
+    }
+
+    // Check for YouTube actions
+    if (prompt.toLowerCase().includes('youtube')) {
+      console.log('Detected YouTube action, using optimized steps');
+      const searchTerm = prompt.toLowerCase().includes('find') ? 
+        prompt.split('find')[1].trim() : 
+        prompt.split('youtube')[1].trim();
+        
+      return [
+        {
+          action: 'navigate',
+          selector: '',
+          value: 'https://www.youtube.com',
+          reasoning: 'Navigate to YouTube homepage'
+        },
+        {
+          action: 'wait_for_element',
+          selector: 'input[name="search_query"]',
+          value: '',
+          reasoning: 'Wait for search box to be available'
+        },
+        {
+          action: 'type',
+          selector: 'input[name="search_query"]',
+          value: searchTerm,
+          reasoning: 'Enter search query'
+        },
+        {
+          action: 'click',
+          selector: 'button[aria-label="Search"]',
+          value: '',
+          reasoning: 'Click search button'
+        },
+        {
+          action: 'wait_for_element',
+          selector: 'ytd-video-renderer',
+          value: '',
+          reasoning: 'Wait for search results to load'
+        },
+        {
+          action: 'screenshot',
+          selector: '',
+          value: '',
+          reasoning: 'Capture final state'
+        }
+      ];
+    }
+
     console.log('Sending prompt to Ollama:', prompt);
     const response = await axios.post('http://localhost:11434/api/chat', {
       model: 'llama3.2-vision',
@@ -166,42 +254,6 @@ Output Format:
       
       // Validate the steps have the correct structure
       if (Array.isArray(steps) && steps.length > 0) {
-        // For Google searches, override with known working selectors
-        if (prompt.toLowerCase().includes('google')) {
-          return [
-            {
-              action: 'navigate',
-              selector: '',
-              value: 'https://www.google.com',
-              reasoning: 'Navigate to Google homepage'
-            },
-            {
-              action: 'type',
-              selector: 'textarea[name="q"]',
-              value: prompt.toLowerCase().includes('find') ? prompt.split('find')[1].trim() : prompt,
-              reasoning: 'Enter search query'
-            },
-            {
-              action: 'type',
-              selector: 'textarea[name="q"]',
-              value: '\n',
-              reasoning: 'Submit search by pressing Enter'
-            },
-            {
-              action: 'wait_for_element',
-              selector: '#search',
-              value: '',
-              reasoning: 'Wait for search results to load'
-            },
-            {
-              action: 'screenshot',
-              selector: '',
-              value: '',
-              reasoning: 'Capture final state'
-            }
-          ];
-        }
-        
         // Add a screenshot step at the end if not present
         if (steps[steps.length - 1].action !== 'screenshot') {
           steps.push({ 
