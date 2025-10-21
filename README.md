@@ -61,10 +61,16 @@ Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
 
 ### Backend
 
-#### `node server.js` (from server directory)
+#### `node server/server.js`
 
 Starts the Express.js server on port 3001.\
-The server handles browser automation tasks and provides API endpoints for the frontend.
+The server handles browser automation tasks and provides API endpoints:
+
+- `POST /execute-prompt` - Execute browser automation
+- `GET /health` - Health check endpoint
+- `GET /metrics` - Detailed metrics
+- `GET /metrics/summary` - Metrics summary
+- `POST /metrics/reset` - Reset metrics (requires API key)
 
 ### Production
 
@@ -224,6 +230,241 @@ Try these example prompts in the application:
 - Frontend: React application (port 3000)
 - Backend: Express.js server (port 3001)
 - Browser Automation: Playwright with Chrome
+
+## Logging and Monitoring
+
+The application includes comprehensive logging and monitoring capabilities for production readiness and debugging.
+
+### Logging System
+
+The server uses **Winston** for structured logging with the following features:
+
+- **Multiple log levels**: error, warn, info, http, debug
+- **Console logging**: Human-readable format in development
+- **File logging**: JSON format with automatic rotation
+- **Request logging**: HTTP requests via Morgan middleware
+- **Structured logs**: Contextual information for all events
+
+#### Log Files
+
+Logs are stored in `/server/logs/` directory:
+
+| File | Contents | Retention |
+|------|----------|-----------|
+| `combined-YYYY-MM-DD.log` | All logs (info level and above) | 14 days |
+| `error-YYYY-MM-DD.log` | Error logs only | 30 days |
+| `access-YYYY-MM-DD.log` | HTTP access logs | 14 days |
+
+#### Log Configuration
+
+Configure logging in `.env`:
+
+```env
+# Log level: error, warn, info, http, debug
+LOG_LEVEL=info
+
+# Enable/disable file logging
+LOG_TO_FILE=true
+
+# Maximum log file size before rotation
+LOG_MAX_SIZE=20m
+
+# Maximum log files to keep
+LOG_MAX_FILES=14d
+```
+
+#### Log Levels
+
+- **error**: Critical errors that need immediate attention
+- **warn**: Warning messages (auth failures, validation errors)
+- **info**: General informational messages (automation steps, completions)
+- **http**: HTTP request/response logs
+- **debug**: Detailed debugging information (Ollama responses, parsing details)
+
+**Production recommendation**: Use `LOG_LEVEL=info` or `LOG_LEVEL=warn`
+**Development recommendation**: Use `LOG_LEVEL=debug` for detailed output
+
+### Monitoring & Metrics
+
+The application tracks comprehensive metrics accessible via API endpoints:
+
+#### Health Check Endpoint
+
+**GET `/health`**
+
+Returns application health status:
+
+```bash
+curl http://localhost:3001/health
+```
+
+Response:
+```json
+{
+  "status": "healthy",
+  "uptime": {
+    "seconds": 3600,
+    "formatted": "1h 0m 0s"
+  },
+  "checks": {
+    "errorRate": {
+      "status": "ok",
+      "value": "2.50%",
+      "threshold": "20%"
+    },
+    "authFailureRate": {
+      "status": "ok",
+      "value": "0.00%",
+      "threshold": "20%"
+    },
+    "automationSuccessRate": {
+      "status": "ok",
+      "value": "95.00%",
+      "threshold": "80%"
+    },
+    "averageResponseTime": {
+      "status": "ok",
+      "value": "2345ms",
+      "threshold": "5000ms"
+    }
+  },
+  "issues": [],
+  "timestamp": "2025-01-21T12:00:00.000Z"
+}
+```
+
+**Status values:**
+- `healthy`: All systems operational
+- `degraded`: Some issues detected but service is available
+- `unhealthy`: Critical issues, service may be unavailable
+
+#### Metrics Summary Endpoint
+
+**GET `/metrics/summary`**
+
+Returns a simplified metrics overview:
+
+```bash
+curl http://localhost:3001/metrics/summary
+```
+
+Response:
+```json
+{
+  "requests": {
+    "total": 150,
+    "success": 145,
+    "failed": 5,
+    "errorRate": "3.33%"
+  },
+  "automation": {
+    "executions": 45,
+    "successRate": "93.33%",
+    "totalSteps": 225,
+    "totalActions": 225
+  },
+  "performance": {
+    "averageResponseTime": "2345ms",
+    "slowest": "8900ms",
+    "fastest": "1200ms"
+  },
+  "uptime": "2h 15m 30s"
+}
+```
+
+#### Detailed Metrics Endpoint
+
+**GET `/metrics`**
+
+Returns comprehensive metrics:
+
+```bash
+curl http://localhost:3001/metrics
+```
+
+Includes:
+- Request counts by status code
+- Authentication statistics
+- Automation execution details
+- Actions breakdown by type
+- Ollama API statistics
+- Performance metrics
+- Error tracking by type
+- Uptime information
+
+#### Reset Metrics (Authenticated)
+
+**POST `/metrics/reset`**
+
+Resets all metrics (requires API key):
+
+```bash
+curl -X POST http://localhost:3001/metrics/reset \
+  -H "X-API-Key: your-api-key"
+```
+
+### Monitored Events
+
+The system logs and tracks:
+
+1. **Authentication Events**
+   - Successful authentications
+   - Failed attempts (missing/invalid keys)
+   - IP addresses of requesters
+
+2. **Browser Automation**
+   - Each browser action executed
+   - Success/failure status
+   - Execution time per action
+
+3. **Ollama Integration**
+   - Requests sent to Ollama
+   - Response times
+   - Parsing successes/failures
+
+4. **Errors**
+   - All errors with stack traces
+   - Context information
+   - Error types and frequencies
+
+5. **Performance**
+   - Request/response times
+   - Slowest and fastest requests
+   - Average response times
+
+### Monitoring Best Practices
+
+1. **Set up health check monitoring**: Use `/health` endpoint with monitoring tools (e.g., UptimeRobot, Pingdom)
+2. **Regular metrics review**: Check `/metrics/summary` periodically
+3. **Log rotation**: Ensure `LOG_MAX_FILES` prevents disk space issues
+4. **Alert on health degradation**: Monitor for `status: "degraded"` or `status: "unhealthy"`
+5. **Track error rates**: If error rate > 20%, investigate logs
+6. **Monitor authentication failures**: High auth failure rates may indicate attacks
+
+### Example: Monitoring with cron
+
+```bash
+# Add to crontab to log metrics every hour
+0 * * * * curl -s http://localhost:3001/metrics/summary >> /var/log/automation-metrics.log
+```
+
+### Example: Health Check Script
+
+```bash
+#!/bin/bash
+# health-check.sh - Check application health
+
+RESPONSE=$(curl -s http://localhost:3001/health)
+STATUS=$(echo $RESPONSE | jq -r '.status')
+
+if [ "$STATUS" != "healthy" ]; then
+  echo "⚠️  Application health: $STATUS"
+  echo $RESPONSE | jq '.issues'
+  # Send alert (email, Slack, etc.)
+else
+  echo "✅ Application is healthy"
+fi
+```
 
 ## Security Best Practices
 
