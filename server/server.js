@@ -4,16 +4,108 @@ const { chromium } = require('playwright');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const morgan = require('morgan');
+require('dotenv').config();
+
+// Import logger and metrics
+const logger = require('./logger');
+const metrics = require('./metrics');
+
 const app = express();
 
+// Configuration from environment variables
+const config = {
+  port: process.env.PORT || 3001,
+  apiKey: process.env.API_KEY,
+  allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+  ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
+  ollamaModel: process.env.OLLAMA_MODEL || 'llama3.2-vision',
+  ollamaTimeout: parseInt(process.env.OLLAMA_TIMEOUT) || 60000,
+  browserHeadless: process.env.BROWSER_HEADLESS === 'true',
+  browserViewportWidth: parseInt(process.env.BROWSER_VIEWPORT_WIDTH) || 1920,
+  browserViewportHeight: parseInt(process.env.BROWSER_VIEWPORT_HEIGHT) || 1080,
+  uploadDir: process.env.UPLOAD_DIR || './uploads'
+};
+
 // Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = path.join(__dirname, config.uploadDir);
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir);
 }
 
-app.use(cors());
+// CORS configuration
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, postman)
+    if (!origin) return callback(null, true);
+
+    if (config.allowedOrigins.indexOf(origin) !== -1 || config.allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
+
+// HTTP Request Logging Middleware
+app.use(morgan('combined', { stream: logger.stream }));
+
+// Metrics Tracking Middleware
+app.use((req, res, next) => {
+  const startTime = Date.now();
+
+  // Log request
+  logger.logRequest(req);
+
+  // Intercept response
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    metrics.recordRequest(res.statusCode, duration);
+    logger.logResponse(req, res, duration);
+  });
+
+  next();
+});
+
+// API Key Authentication Middleware
+function authenticateApiKey(req, res, next) {
+  const clientIp = req.ip || req.connection.remoteAddress;
+
+  // Skip authentication if no API_KEY is set (development mode)
+  if (!config.apiKey) {
+    logger.warn('API_KEY not set. Authentication is disabled!');
+    return next();
+  }
+
+  const apiKey = req.headers['x-api-key'];
+
+  if (!apiKey) {
+    logger.logAuth(false, clientIp, { reason: 'missing_key' });
+    metrics.recordAuthAttempt(false);
+    return res.status(401).json({
+      success: false,
+      error: 'API key is required. Please provide X-API-Key header.'
+    });
+  }
+
+  if (apiKey !== config.apiKey) {
+    logger.logAuth(false, clientIp, { reason: 'invalid_key' });
+    metrics.recordAuthAttempt(false);
+    return res.status(403).json({
+      success: false,
+      error: 'Invalid API key.'
+    });
+  }
+
+  logger.logAuth(true, clientIp);
+  metrics.recordAuthAttempt(true);
+  next();
+}
+
 // Serve static files from uploads directory
 app.use('/uploads', express.static(uploadsDir));
 
@@ -22,13 +114,13 @@ let browser;
 async function initBrowser() {
   // Modern Chrome user agent
   const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-  
-  browser = await chromium.launch({ 
-    headless: false,
+
+  browser = await chromium.launch({
+    headless: config.browserHeadless,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-features=IsolateOrigins,site-per-process',
-      '--window-size=1920,1080'
+      `--window-size=${config.browserViewportWidth},${config.browserViewportHeight}`
     ]
   });
 }
@@ -36,7 +128,7 @@ async function initBrowser() {
 async function createContext() {
   return await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    viewport: { width: 1920, height: 1080 },
+    viewport: { width: config.browserViewportWidth, height: config.browserViewportHeight },
     deviceScaleFactor: 1,
     hasTouch: false,
     isMobile: false,
@@ -56,8 +148,8 @@ async function createContext() {
     javaScriptEnabled: true,
     // Enable video recording
     recordVideo: {
-      dir: 'uploads',
-      size: { width: 1920, height: 1080 }
+      dir: uploadsDir,
+      size: { width: config.browserViewportWidth, height: config.browserViewportHeight }
     },
     // Add additional headers to appear more human-like
     extraHTTPHeaders: {
@@ -78,10 +170,12 @@ async function createContext() {
 initBrowser();
 
 async function queryOllama(prompt) {
+  const startTime = Date.now();
+
   try {
     // Check for Google search first
     if (prompt.toLowerCase().includes('google')) {
-      console.log('Detected Google search, using optimized steps');
+      logger.info('Detected Google search, using optimized steps');
       const searchTerm = prompt.toLowerCase().includes('find') ? 
         prompt.split('find')[1].trim() : 
         prompt.split('google')[1].trim();
@@ -122,7 +216,7 @@ async function queryOllama(prompt) {
 
     // Check for YouTube actions
     if (prompt.toLowerCase().includes('youtube')) {
-      console.log('Detected YouTube action, using optimized steps');
+      logger.info('Detected YouTube action, using optimized steps');
       const searchTerm = prompt.toLowerCase().includes('find') ? 
         prompt.split('find')[1].trim() : 
         prompt.split('youtube')[1].trim();
@@ -167,9 +261,9 @@ async function queryOllama(prompt) {
       ];
     }
 
-    console.log('Sending prompt to Ollama:', prompt);
-    const response = await axios.post('http://localhost:11434/api/chat', {
-      model: 'llama3.2-vision',
+    logger.logOllamaRequest(prompt);
+    const response = await axios.post(`${config.ollamaUrl}/api/chat`, {
+      model: config.ollamaModel,
       messages: [{
         role: 'system',
         content: `You are an advanced AI web interaction agent with the following core capabilities:
@@ -240,37 +334,52 @@ Output Format:
       options: {
         temperature: 0
       }
+    }, {
+      timeout: config.ollamaTimeout
     });
 
-    console.log('Raw Ollama response:', response.data);
-    
+    logger.debug('Raw Ollama response received', {
+      model: config.ollamaModel,
+      hasContent: !!response.data.message?.content
+    });
+
     // Extract the response text and parse it
     const responseText = response.data.message.content;
-    console.log('Response text:', responseText);
+    logger.debug('Response text extracted', {
+      length: responseText?.length
+    });
 
     try {
       // Try to parse the response as JSON
       const steps = JSON.parse(responseText);
-      
+
       // Validate the steps have the correct structure
       if (Array.isArray(steps) && steps.length > 0) {
         // Add a screenshot step at the end if not present
         if (steps[steps.length - 1].action !== 'screenshot') {
-          steps.push({ 
+          steps.push({
             action: 'screenshot',
             selector: '',
             value: '',
             reasoning: 'Capture final state'
           });
         }
+
+        const responseTime = Date.now() - startTime;
+        logger.logOllamaResponse(true, steps, { responseTime });
+        metrics.recordOllamaRequest(true, responseTime);
+
         return steps;
       }
     } catch (parseError) {
-      console.log('Failed to parse response:', parseError);
+      logger.warn('Failed to parse Ollama response', {
+        error: parseError.message,
+        responsePreview: responseText?.substring(0, 200)
+      });
     }
-    
+
     // Default fallback
-    console.log('Using default fallback steps');
+    logger.info('Using default fallback steps');
     return [{
       action: 'navigate',
       selector: '',
@@ -284,7 +393,15 @@ Output Format:
       reasoning: 'Capture final state'
     }];
   } catch (error) {
-    console.error('Error querying Ollama:', error);
+    const responseTime = Date.now() - startTime;
+    logger.logError(error, {
+      context: 'queryOllama',
+      promptLength: prompt.length,
+      ollamaUrl: config.ollamaUrl
+    });
+    metrics.recordOllamaRequest(false, responseTime);
+    metrics.recordError('ollama_query');
+
     return [{
       action: 'navigate',
       selector: '',
@@ -340,7 +457,11 @@ async function executeSteps(page, steps) {
   
   for (const step of steps) {
     try {
-      console.log(`Executing step: ${step.action} - ${step.reasoning}`);
+      logger.info('Executing browser step', {
+        action: step.action,
+        reasoning: step.reasoning,
+        selector: step.selector
+      });
       await addRandomDelay(); // Add random delay before each action
       
       switch (step.action) {
@@ -431,7 +552,7 @@ async function executeSteps(page, steps) {
           break;
           
         default:
-          console.warn(`Unknown action: ${step.action}`);
+          logger.warn('Unknown action type', { action: step.action });
       }
       
       results.push({
@@ -443,7 +564,14 @@ async function executeSteps(page, steps) {
       });
       
     } catch (error) {
-      console.error(`Error executing step ${step.action}:`, error);
+      logger.logError(error, {
+        context: 'executeStep',
+        action: step.action,
+        selector: step.selector
+      });
+      logger.logBrowserAction(step.action, false, {
+        error: error.message
+      });
       results.push({
         type: 'action',
         action: step.action,
@@ -456,7 +584,9 @@ async function executeSteps(page, steps) {
       try {
         await takeScreenshot();
       } catch (screenshotError) {
-        console.error('Failed to take error screenshot:', screenshotError);
+        logger.error('Failed to take error screenshot', {
+          error: screenshotError.message
+        });
       }
     }
   }
@@ -464,13 +594,42 @@ async function executeSteps(page, steps) {
   return results;
 }
 
-app.post('/execute-prompt', async (req, res) => {
+app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
+  const executionStartTime = Date.now();
+
   try {
     const { prompt } = req.body;
-    
+
+    // Validate input
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+      logger.warn('Invalid prompt received', { prompt });
+      metrics.recordError('invalid_prompt');
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid prompt. Please provide a non-empty string.'
+      });
+    }
+
+    if (prompt.length > 5000) {
+      logger.warn('Prompt too long', { length: prompt.length });
+      metrics.recordError('prompt_too_long');
+      return res.status(400).json({
+        success: false,
+        error: 'Prompt too long. Maximum length is 5000 characters.'
+      });
+    }
+
+    logger.info('Automation execution started', {
+      promptLength: prompt.length,
+      promptPreview: prompt.substring(0, 100)
+    });
+
     // Get steps from Ollama
     const steps = await queryOllama(prompt);
-    console.log('Executing steps:', JSON.stringify(steps, null, 2));
+    logger.info('Executing automation steps', {
+      stepsCount: steps.length,
+      actions: steps.map(s => s.action)
+    });
     
     // Create a new context with human-like settings
     const context = await createContext();
@@ -501,7 +660,15 @@ app.post('/execute-prompt', async (req, res) => {
     
     // Clean up
     await context.close();
-    
+
+    const executionTime = Date.now() - executionStartTime;
+    logger.info('Automation execution completed successfully', {
+      executionTime,
+      stepsExecuted: steps.length,
+      resultsCount: results.length
+    });
+    metrics.recordAutomationExecution(true, steps);
+
     res.json({
       success: true,
       message: 'Actions executed successfully',
@@ -511,7 +678,14 @@ app.post('/execute-prompt', async (req, res) => {
       videoUrl: videoUrl
     });
   } catch (error) {
-    console.error('Error:', error);
+    const executionTime = Date.now() - executionStartTime;
+    logger.logError(error, {
+      context: 'execute-prompt',
+      executionTime
+    });
+    metrics.recordAutomationExecution(false, []);
+    metrics.recordError('execution_failed');
+
     res.status(500).json({
       success: false,
       error: error.message
@@ -519,7 +693,56 @@ app.post('/execute-prompt', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Health Check Endpoint
+app.get('/health', (req, res) => {
+  const health = metrics.getHealthStatus();
+  const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
+
+  res.status(statusCode).json(health);
+});
+
+// Metrics Endpoint
+app.get('/metrics', (req, res) => {
+  res.json(metrics.getMetrics());
+});
+
+// Summary Endpoint (simpler view)
+app.get('/metrics/summary', (req, res) => {
+  res.json(metrics.getSummary());
+});
+
+// Reset Metrics (useful for testing)
+app.post('/metrics/reset', authenticateApiKey, (req, res) => {
+  metrics.reset();
+  logger.info('Metrics reset by user');
+  res.json({ success: true, message: 'Metrics reset successfully' });
+});
+
+app.listen(config.port, () => {
+  logger.info('Server started', {
+    port: config.port,
+    environment: process.env.NODE_ENV || 'development',
+    authEnabled: !!config.apiKey,
+    ollamaUrl: config.ollamaUrl,
+    ollamaModel: config.ollamaModel
+  });
+
+  console.log(`\n🚀 Server running on port ${config.port}`);
+  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+
+  if (!config.apiKey) {
+    console.warn('⚠️  WARNING: API_KEY not set. API authentication is DISABLED!');
+    console.warn('   Please set API_KEY in your .env file for security.');
+  } else {
+    console.log('✅ API authentication enabled');
+  }
+
+  console.log(`🤖 Ollama URL: ${config.ollamaUrl}`);
+  console.log(`🧠 Ollama Model: ${config.ollamaModel}`);
+  console.log(`\n📍 Endpoints:`);
+  console.log(`   POST /execute-prompt - Execute automation`);
+  console.log(`   GET  /health - Health check`);
+  console.log(`   GET  /metrics - Detailed metrics`);
+  console.log(`   GET  /metrics/summary - Metrics summary`);
+  console.log('');
 }); 
