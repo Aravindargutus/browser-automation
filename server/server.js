@@ -279,17 +279,81 @@ Browser Action Guidelines:
     Handle potential errors gracefully
     Prioritize reliability over speed
 
-Action Types Available:
+Action Types Available (50+ actions):
+
+BASIC INTERACTIONS:
     navigate: Go to specific URLs
-    click: Interact with page elements
+    click: Click on page elements
+    double_click: Double-click on elements
+    right_click: Right-click for context menu
+    hover: Hover over elements
+    drag_and_drop: Drag element to another element (selector=source, value=target)
+
+INPUT & FORMS:
     type: Input text into fields
-    extract_text: Retrieve page content
-    wait_for_element: Ensure page readiness
-    screenshot: Capture page state
-    execute_javascript: Run custom scripts
-    select_dropdown: Choose dropdown options
-    scroll_to: Navigate page sections
-    hover: Interact with elements
+    type_text: Type at current focus position
+    clear_input: Clear input field content
+    focus: Focus on an element
+    press_key: Press keyboard key (Enter, Escape, ArrowDown, etc.)
+    check_checkbox: Check a checkbox
+    uncheck_checkbox: Uncheck a checkbox
+    select_dropdown: Choose dropdown option
+    select_text: Select text in element
+
+FILE OPERATIONS:
+    upload_file: Upload file (selector=input, value=file path)
+    download_file: Download file by clicking element
+
+NAVIGATION:
+    go_back: Navigate back in history
+    go_forward: Navigate forward in history
+    reload: Reload current page
+    close_tab: Close current tab
+
+FRAME & WINDOW:
+    switch_to_iframe: Switch to iframe (selector=iframe)
+    switch_to_main_frame: Switch back to main frame
+    switch_to_new_tab: Click element and switch to new tab
+
+DATA EXTRACTION:
+    extract_text: Get text content from element
+    get_attribute: Get element attribute (selector=element, value=attribute name)
+    get_title: Get page title
+    get_url: Get current URL
+    element_exists: Check if element exists
+    is_visible: Check if element is visible
+    get_element_count: Count matching elements
+    get_cookies: Get all cookies
+    get_alert_text: Get alert dialog text
+
+WAITING:
+    wait_for_element: Wait for element to appear
+    wait_for_navigation: Wait for page navigation
+    wait_for_timeout: Wait for specified milliseconds
+    wait_for_url: Wait for specific URL
+
+SCROLLING:
+    scroll_to: Scroll to specific element
+    scroll_to_top: Scroll to page top
+    scroll_to_bottom: Scroll to page bottom
+    scroll_by: Scroll by pixels (value=pixels, positive=down)
+
+SCREENSHOTS:
+    screenshot: Capture full page screenshot
+    screenshot_element: Capture specific element screenshot
+
+COOKIES & STORAGE:
+    set_cookie: Set cookie (value=JSON cookie object)
+    get_cookies: Get all cookies
+    clear_cookies: Clear all cookies
+
+ALERTS & DIALOGS:
+    accept_alert: Accept alert/confirm dialog
+    dismiss_alert: Dismiss alert/confirm dialog
+    get_alert_text: Get alert message text
+
+ADVANCED:
+    execute_javascript: Run custom JavaScript code
 
 Action Execution Rules:
     Confirm each action's feasibility
@@ -322,7 +386,20 @@ Output Format:
           properties: {
             action: {
               type: 'string',
-              enum: ['navigate', 'click', 'type', 'extract_text', 'wait_for_element', 'screenshot', 'execute_javascript', 'select_dropdown', 'scroll_to', 'hover']
+              enum: [
+                'navigate', 'click', 'double_click', 'right_click', 'hover', 'drag_and_drop',
+                'type', 'type_text', 'clear_input', 'focus', 'press_key', 'check_checkbox', 'uncheck_checkbox', 'select_dropdown', 'select_text',
+                'upload_file', 'download_file',
+                'go_back', 'go_forward', 'reload', 'close_tab',
+                'switch_to_iframe', 'switch_to_main_frame', 'switch_to_new_tab',
+                'extract_text', 'get_attribute', 'get_title', 'get_url', 'element_exists', 'is_visible', 'get_element_count', 'get_cookies', 'get_alert_text',
+                'wait_for_element', 'wait_for_navigation', 'wait_for_timeout', 'wait_for_url',
+                'scroll_to', 'scroll_to_top', 'scroll_to_bottom', 'scroll_by',
+                'screenshot', 'screenshot_element',
+                'set_cookie', 'clear_cookies',
+                'accept_alert', 'dismiss_alert',
+                'execute_javascript'
+              ]
             },
             selector: { type: 'string' },
             value: { type: 'string' },
@@ -550,7 +627,312 @@ async function executeSteps(page, steps) {
         case 'screenshot':
           await takeScreenshot();
           break;
-          
+
+        // Advanced Interaction Actions
+        case 'double_click':
+          await page.waitForSelector(step.selector);
+          await page.hover(step.selector);
+          await addRandomDelay();
+          await page.dblclick(step.selector);
+          await page.waitForLoadState('networkidle');
+          await takeScreenshot();
+          break;
+
+        case 'right_click':
+          await page.waitForSelector(step.selector);
+          await page.click(step.selector, { button: 'right' });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'drag_and_drop':
+          // step.selector = source, step.value = target selector
+          await page.waitForSelector(step.selector);
+          await page.waitForSelector(step.value);
+          await page.dragAndDrop(step.selector, step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        // File Operations
+        case 'upload_file':
+          // step.selector = file input, step.value = file path
+          await page.waitForSelector(step.selector);
+          await page.setInputFiles(step.selector, step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'download_file':
+          // Click download button and wait for download
+          const [download] = await Promise.all([
+            page.waitForEvent('download'),
+            page.click(step.selector)
+          ]);
+          const downloadPath = path.join(uploadsDir, download.suggestedFilename());
+          await download.saveAs(downloadPath);
+          results.push({
+            type: 'download',
+            data: downloadPath,
+            filename: download.suggestedFilename(),
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        // Navigation Actions
+        case 'go_back':
+          await page.goBack({ waitUntil: 'networkidle' });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'go_forward':
+          await page.goForward({ waitUntil: 'networkidle' });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'reload':
+          await page.reload({ waitUntil: 'networkidle' });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'close_tab':
+          await page.close();
+          break;
+
+        // Frame/Window Switching
+        case 'switch_to_iframe':
+          // step.selector = iframe selector
+          await page.waitForSelector(step.selector);
+          const frameElement = await page.$(step.selector);
+          const frame = await frameElement.contentFrame();
+          // Store frame reference for subsequent actions
+          page._currentFrame = frame;
+          break;
+
+        case 'switch_to_main_frame':
+          page._currentFrame = null;
+          break;
+
+        case 'switch_to_new_tab':
+          // Wait for new tab to open and switch to it
+          const [newPage] = await Promise.all([
+            context.waitForEvent('page'),
+            page.click(step.selector)
+          ]);
+          await newPage.waitForLoadState('networkidle');
+          // Replace page reference
+          page = newPage;
+          await takeScreenshot();
+          break;
+
+        // Data Extraction Actions
+        case 'get_attribute':
+          // step.selector = element, step.value = attribute name
+          await page.waitForSelector(step.selector);
+          const attrValue = await page.$eval(step.selector, (el, attr) => el.getAttribute(attr), step.value);
+          results.push({
+            type: 'attribute',
+            data: attrValue,
+            attribute: step.value,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'get_title':
+          const title = await page.title();
+          results.push({
+            type: 'title',
+            data: title,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'get_url':
+          const url = page.url();
+          results.push({
+            type: 'url',
+            data: url,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'element_exists':
+          const exists = await page.$(step.selector) !== null;
+          results.push({
+            type: 'exists',
+            data: exists,
+            selector: step.selector,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'is_visible':
+          await page.waitForSelector(step.selector);
+          const visible = await page.isVisible(step.selector);
+          results.push({
+            type: 'visibility',
+            data: visible,
+            selector: step.selector,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'get_element_count':
+          const elements = await page.$$(step.selector);
+          results.push({
+            type: 'count',
+            data: elements.length,
+            selector: step.selector,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        // Keyboard and Input Actions
+        case 'press_key':
+          // step.value = key name (e.g., 'Enter', 'Escape', 'ArrowDown')
+          await page.keyboard.press(step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'type_text':
+          // Type without selector (types at current focus)
+          await page.keyboard.type(step.value, { delay: Math.random() * 100 + 50 });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'clear_input':
+          await page.waitForSelector(step.selector);
+          await page.click(step.selector, { clickCount: 3 }); // Select all
+          await page.keyboard.press('Backspace');
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'focus':
+          await page.waitForSelector(step.selector);
+          await page.focus(step.selector);
+          await addRandomDelay();
+          break;
+
+        // Cookie Management
+        case 'set_cookie':
+          // step.value should be JSON string with cookie object
+          const cookieData = JSON.parse(step.value);
+          await context.addCookies([cookieData]);
+          break;
+
+        case 'get_cookies':
+          const cookies = await context.cookies();
+          results.push({
+            type: 'cookies',
+            data: cookies,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'clear_cookies':
+          await context.clearCookies();
+          break;
+
+        // Advanced Waiting
+        case 'wait_for_navigation':
+          await page.waitForNavigation({ waitUntil: 'networkidle' });
+          await takeScreenshot();
+          break;
+
+        case 'wait_for_timeout':
+          // step.value = milliseconds
+          await page.waitForTimeout(parseInt(step.value));
+          break;
+
+        case 'wait_for_url':
+          // step.value = URL or regex pattern
+          await page.waitForURL(step.value);
+          await takeScreenshot();
+          break;
+
+        // Screenshot Actions
+        case 'screenshot_element':
+          await page.waitForSelector(step.selector);
+          const element = await page.$(step.selector);
+          const elementScreenshot = await element.screenshot();
+          const screenshotName = `element-${Date.now()}.png`;
+          const elementScreenshotPath = path.join(uploadsDir, screenshotName);
+          fs.writeFileSync(elementScreenshotPath, elementScreenshot);
+          results.push({
+            type: 'screenshot',
+            data: `data:image/png;base64,${elementScreenshot.toString('base64')}`,
+            path: `/uploads/${screenshotName}`,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        // Selection Actions
+        case 'select_text':
+          await page.waitForSelector(step.selector);
+          await page.click(step.selector, { clickCount: 3 }); // Triple-click to select all text
+          await addRandomDelay();
+          break;
+
+        case 'check_checkbox':
+          await page.waitForSelector(step.selector);
+          await page.check(step.selector);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'uncheck_checkbox':
+          await page.waitForSelector(step.selector);
+          await page.uncheck(step.selector);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        // Scroll Actions
+        case 'scroll_to_top':
+          await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'scroll_to_bottom':
+          await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'scroll_by':
+          // step.value = pixels (positive = down, negative = up)
+          await page.evaluate((pixels) => window.scrollBy({ top: parseInt(pixels), behavior: 'smooth' }), step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        // Alert Handling
+        case 'accept_alert':
+          page.once('dialog', dialog => dialog.accept());
+          break;
+
+        case 'dismiss_alert':
+          page.once('dialog', dialog => dialog.dismiss());
+          break;
+
+        case 'get_alert_text':
+          page.once('dialog', dialog => {
+            results.push({
+              type: 'alert_text',
+              data: dialog.message(),
+              timestamp: new Date().toISOString()
+            });
+            dialog.dismiss();
+          });
+          break;
+
         default:
           logger.warn('Unknown action type', { action: step.action });
       }
