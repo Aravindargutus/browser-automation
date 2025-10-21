@@ -4,16 +4,75 @@ const { chromium } = require('playwright');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config();
+
 const app = express();
 
+// Configuration from environment variables
+const config = {
+  port: process.env.PORT || 3001,
+  apiKey: process.env.API_KEY,
+  allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+  ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
+  ollamaModel: process.env.OLLAMA_MODEL || 'llama3.2-vision',
+  ollamaTimeout: parseInt(process.env.OLLAMA_TIMEOUT) || 60000,
+  browserHeadless: process.env.BROWSER_HEADLESS === 'true',
+  browserViewportWidth: parseInt(process.env.BROWSER_VIEWPORT_WIDTH) || 1920,
+  browserViewportHeight: parseInt(process.env.BROWSER_VIEWPORT_HEIGHT) || 1080,
+  uploadDir: process.env.UPLOAD_DIR || './uploads'
+};
+
 // Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = path.join(__dirname, config.uploadDir);
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir);
 }
 
-app.use(cors());
+// CORS configuration
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, postman)
+    if (!origin) return callback(null, true);
+
+    if (config.allowedOrigins.indexOf(origin) !== -1 || config.allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
+
+// API Key Authentication Middleware
+function authenticateApiKey(req, res, next) {
+  // Skip authentication if no API_KEY is set (development mode)
+  if (!config.apiKey) {
+    console.warn('⚠️  WARNING: API_KEY not set. Authentication is disabled!');
+    return next();
+  }
+
+  const apiKey = req.headers['x-api-key'];
+
+  if (!apiKey) {
+    return res.status(401).json({
+      success: false,
+      error: 'API key is required. Please provide X-API-Key header.'
+    });
+  }
+
+  if (apiKey !== config.apiKey) {
+    return res.status(403).json({
+      success: false,
+      error: 'Invalid API key.'
+    });
+  }
+
+  next();
+}
+
 // Serve static files from uploads directory
 app.use('/uploads', express.static(uploadsDir));
 
@@ -22,13 +81,13 @@ let browser;
 async function initBrowser() {
   // Modern Chrome user agent
   const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-  
-  browser = await chromium.launch({ 
-    headless: false,
+
+  browser = await chromium.launch({
+    headless: config.browserHeadless,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-features=IsolateOrigins,site-per-process',
-      '--window-size=1920,1080'
+      `--window-size=${config.browserViewportWidth},${config.browserViewportHeight}`
     ]
   });
 }
@@ -36,7 +95,7 @@ async function initBrowser() {
 async function createContext() {
   return await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    viewport: { width: 1920, height: 1080 },
+    viewport: { width: config.browserViewportWidth, height: config.browserViewportHeight },
     deviceScaleFactor: 1,
     hasTouch: false,
     isMobile: false,
@@ -56,8 +115,8 @@ async function createContext() {
     javaScriptEnabled: true,
     // Enable video recording
     recordVideo: {
-      dir: 'uploads',
-      size: { width: 1920, height: 1080 }
+      dir: uploadsDir,
+      size: { width: config.browserViewportWidth, height: config.browserViewportHeight }
     },
     // Add additional headers to appear more human-like
     extraHTTPHeaders: {
@@ -168,8 +227,8 @@ async function queryOllama(prompt) {
     }
 
     console.log('Sending prompt to Ollama:', prompt);
-    const response = await axios.post('http://localhost:11434/api/chat', {
-      model: 'llama3.2-vision',
+    const response = await axios.post(`${config.ollamaUrl}/api/chat`, {
+      model: config.ollamaModel,
       messages: [{
         role: 'system',
         content: `You are an advanced AI web interaction agent with the following core capabilities:
@@ -240,6 +299,8 @@ Output Format:
       options: {
         temperature: 0
       }
+    }, {
+      timeout: config.ollamaTimeout
     });
 
     console.log('Raw Ollama response:', response.data);
@@ -464,9 +525,24 @@ async function executeSteps(page, steps) {
   return results;
 }
 
-app.post('/execute-prompt', async (req, res) => {
+app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
   try {
     const { prompt } = req.body;
+
+    // Validate input
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid prompt. Please provide a non-empty string.'
+      });
+    }
+
+    if (prompt.length > 5000) {
+      return res.status(400).json({
+        success: false,
+        error: 'Prompt too long. Maximum length is 5000 characters.'
+      });
+    }
     
     // Get steps from Ollama
     const steps = await queryOllama(prompt);
@@ -519,7 +595,15 @@ app.post('/execute-prompt', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(config.port, () => {
+  console.log(`Server running on port ${config.port}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  if (!config.apiKey) {
+    console.warn('⚠️  WARNING: API_KEY not set. API authentication is DISABLED!');
+    console.warn('   Please set API_KEY in your .env file for security.');
+  } else {
+    console.log('✓ API authentication enabled');
+  }
+  console.log(`Ollama URL: ${config.ollamaUrl}`);
+  console.log(`Ollama Model: ${config.ollamaModel}`);
 }); 

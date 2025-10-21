@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { 
-  Container, 
-  TextField, 
-  Button, 
-  Box, 
-  Paper, 
+import {
+  Container,
+  TextField,
+  Button,
+  Box,
+  Paper,
   Typography,
   CircularProgress,
   List,
@@ -16,6 +16,10 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import axios from 'axios';
+
+// API Configuration from environment variables
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+const API_KEY = process.env.REACT_APP_API_KEY;
 
 function App() {
   const [prompt, setPrompt] = useState('');
@@ -29,15 +33,36 @@ function App() {
     setLoading(true);
     setError(null);
     setResults(null);
-    
+
     try {
-      const response = await axios.post('http://localhost:3001/execute-prompt', {
+      // Prepare headers
+      const headers = {
+        'Content-Type': 'application/json'
+      };
+
+      // Add API key if configured
+      if (API_KEY) {
+        headers['X-API-Key'] = API_KEY;
+      }
+
+      const response = await axios.post(`${API_URL}/execute-prompt`, {
         prompt
+      }, {
+        headers
       });
-      
+
       setResults(response.data);
     } catch (err) {
-      setError(err.message);
+      // Better error handling
+      if (err.response) {
+        // Server responded with error
+        setError(err.response.data?.error || err.message);
+      } else if (err.request) {
+        // Request made but no response
+        setError('Server is not responding. Please check if the backend is running.');
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -50,7 +75,7 @@ function App() {
   };
 
   const getFullUrl = (path) => {
-    return path.startsWith('http') ? path : `http://localhost:3001${path}`;
+    return path.startsWith('http') ? path : `${API_URL}${path}`;
   };
 
   return (
