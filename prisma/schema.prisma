@@ -1,0 +1,108 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model for authentication and ownership
+model User {
+  id         String      @id @default(uuid())
+  email      String      @unique
+  apiKey     String      @unique @map("api_key")
+  role       String      @default("user")
+  createdAt  DateTime    @default(now()) @map("created_at")
+  updatedAt  DateTime    @updatedAt @map("updated_at")
+
+  workflows  Workflow[]
+  executions Execution[]
+
+  @@map("users")
+}
+
+// Workflow model - reusable automation workflows
+model Workflow {
+  id          String      @id @default(uuid())
+  name        String
+  description String?
+  steps       Json        // Array of action steps in JSON format
+  tags        String[]    @default([])
+  isTemplate  Boolean     @default(false) @map("is_template")
+  isActive    Boolean     @default(true) @map("is_active")
+  userId      String      @map("user_id")
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  executions  Execution[]
+  schedules   Schedule[]
+
+  @@index([userId])
+  @@index([isTemplate])
+  @@map("workflows")
+}
+
+// Execution model - tracks each automation run
+model Execution {
+  id          String    @id @default(uuid())
+  workflowId  String?   @map("workflow_id")
+  workflow    Workflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  userId      String    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Execution details
+  prompt      String?   @db.Text
+  status      String    @default("pending") // pending, running, success, failed, cancelled
+  startTime   DateTime  @default(now()) @map("start_time")
+  endTime     DateTime? @map("end_time")
+
+  // Results and data
+  steps       Json      // Array of executed steps
+  results     Json?     // Execution results
+  errorLog    String?   @db.Text @map("error_log")
+  screenshot  String?   // Path to final screenshot
+  videoUrl    String?   @map("video_url") // Path to video recording
+
+  // Metadata
+  metadata    Json?     // Additional execution metadata
+  triggeredBy String    @default("manual") @map("triggered_by") // manual, schedule, webhook
+
+  @@index([userId])
+  @@index([workflowId])
+  @@index([status])
+  @@index([startTime])
+  @@map("executions")
+}
+
+// Schedule model - for scheduled workflow executions
+model Schedule {
+  id             String    @id @default(uuid())
+  workflowId     String    @map("workflow_id")
+  workflow       Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  // Schedule configuration
+  name           String?
+  cronExpression String    @map("cron_expression")
+  timezone       String    @default("UTC")
+  enabled        Boolean   @default(true)
+
+  // Execution tracking
+  lastRun        DateTime? @map("last_run")
+  nextRun        DateTime? @map("next_run")
+  runCount       Int       @default(0) @map("run_count")
+  failureCount   Int       @default(0) @map("failure_count")
+
+  // Metadata
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([workflowId])
+  @@index([enabled])
+  @@index([nextRun])
+  @@map("schedules")
+}

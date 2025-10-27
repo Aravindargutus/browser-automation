@@ -7,9 +7,10 @@ const path = require('path');
 const morgan = require('morgan');
 require('dotenv').config();
 
-// Import logger and metrics
+// Import logger, metrics, and database
 const logger = require('./logger');
 const metrics = require('./metrics');
+const db = require('./services/database.service');
 
 const app = express();
 
@@ -978,9 +979,10 @@ async function executeSteps(page, steps) {
 
 app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
   const executionStartTime = Date.now();
+  let execution = null;
 
   try {
-    const { prompt } = req.body;
+    const { prompt, workflowId } = req.body;
 
     // Validate input
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
@@ -1006,54 +1008,97 @@ app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
       promptPreview: prompt.substring(0, 100)
     });
 
+    // Create execution record in database
+    try {
+      execution = await db.createExecution({
+        prompt,
+        workflowId: workflowId || null,
+        userId: 'anonymous', // Will be replaced with real user authentication later
+        status: 'running',
+        steps: [],
+        triggeredBy: 'manual'
+      });
+      logger.info('Execution record created', { executionId: execution.id });
+    } catch (dbError) {
+      logger.warn('Failed to create execution record, continuing without persistence', {
+        error: dbError.message
+      });
+    }
+
     // Get steps from Ollama
     const steps = await queryOllama(prompt);
     logger.info('Executing automation steps', {
       stepsCount: steps.length,
       actions: steps.map(s => s.action)
     });
-    
+
+    // Update execution with steps
+    if (execution) {
+      try {
+        await db.updateExecution(execution.id, { steps });
+      } catch (dbError) {
+        logger.warn('Failed to update execution steps', { error: dbError.message });
+      }
+    }
+
     // Create a new context with human-like settings
     const context = await createContext();
     const page = await context.newPage();
-    
+
     // Add random delays between actions to simulate human behavior
     page.setDefaultTimeout(30000); // 30 second timeout
     page.setDefaultNavigationTimeout(30000);
-    
+
     // Execute the steps
     const results = await executeSteps(page, steps);
-    
+
     // Wait for 5 seconds after the last command
     await new Promise(resolve => setTimeout(resolve, 5000));
-    
+
     // Take and save final screenshot
     const screenshotPath = path.join(uploadsDir, `screenshot-${Date.now()}.png`);
-    await page.screenshot({ 
+    await page.screenshot({
       path: screenshotPath,
       type: 'png',
       fullPage: true
     });
     const screenshotUrl = `/uploads/${path.basename(screenshotPath)}`;
-    
+
     // Get the video path
     const videoPath = await page.video().path();
     const videoUrl = `/uploads/${path.basename(videoPath)}`;
-    
+
     // Clean up
     await context.close();
 
     const executionTime = Date.now() - executionStartTime;
     logger.info('Automation execution completed successfully', {
+      executionId: execution?.id,
       executionTime,
       stepsExecuted: steps.length,
       resultsCount: results.length
     });
     metrics.recordAutomationExecution(true, steps);
 
+    // Update execution record as successful
+    if (execution) {
+      try {
+        await db.updateExecution(execution.id, {
+          status: 'success',
+          endTime: new Date(),
+          results,
+          screenshot: screenshotUrl,
+          videoUrl
+        });
+      } catch (dbError) {
+        logger.warn('Failed to update execution as successful', { error: dbError.message });
+      }
+    }
+
     res.json({
       success: true,
       message: 'Actions executed successfully',
+      executionId: execution?.id,
       steps: steps,
       results,
       finalScreenshot: screenshotUrl,
@@ -1063,14 +1108,29 @@ app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
     const executionTime = Date.now() - executionStartTime;
     logger.logError(error, {
       context: 'execute-prompt',
+      executionId: execution?.id,
       executionTime
     });
     metrics.recordAutomationExecution(false, []);
     metrics.recordError('execution_failed');
 
+    // Update execution record as failed
+    if (execution) {
+      try {
+        await db.updateExecution(execution.id, {
+          status: 'failed',
+          endTime: new Date(),
+          errorLog: error.message
+        });
+      } catch (dbError) {
+        logger.warn('Failed to update execution as failed', { error: dbError.message });
+      }
+    }
+
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      executionId: execution?.id
     });
   }
 });
@@ -1098,6 +1158,222 @@ app.post('/metrics/reset', authenticateApiKey, (req, res) => {
   metrics.reset();
   logger.info('Metrics reset by user');
   res.json({ success: true, message: 'Metrics reset successfully' });
+});
+
+// ==================== WORKFLOW ENDPOINTS ====================
+
+// Get all workflows
+app.get('/workflows', authenticateApiKey, async (req, res) => {
+  try {
+    const { isTemplate, isActive, tags, search } = req.query;
+    const workflows = await db.getWorkflows({
+      userId: 'anonymous', // Will be replaced with real user authentication later
+      isTemplate: isTemplate === 'true' ? true : isTemplate === 'false' ? false : undefined,
+      isActive: isActive === 'true' ? true : isActive === 'false' ? false : undefined,
+      tags: tags ? tags.split(',') : undefined,
+      search
+    });
+    res.json({ success: true, data: workflows });
+  } catch (error) {
+    logger.error('Failed to get workflows', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get workflow by ID
+app.get('/workflows/:id', authenticateApiKey, async (req, res) => {
+  try {
+    const workflow = await db.getWorkflowById(req.params.id);
+    if (!workflow) {
+      return res.status(404).json({ success: false, error: 'Workflow not found' });
+    }
+    res.json({ success: true, data: workflow });
+  } catch (error) {
+    logger.error('Failed to get workflow', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create new workflow
+app.post('/workflows', authenticateApiKey, async (req, res) => {
+  try {
+    const { name, description, steps, tags, isTemplate } = req.body;
+
+    // Validation
+    if (!name || !steps) {
+      return res.status(400).json({
+        success: false,
+        error: 'Name and steps are required'
+      });
+    }
+
+    const workflow = await db.createWorkflow({
+      name,
+      description: description || null,
+      steps,
+      tags: tags || [],
+      isTemplate: isTemplate || false,
+      userId: 'anonymous' // Will be replaced with real user authentication later
+    });
+
+    res.status(201).json({ success: true, data: workflow });
+  } catch (error) {
+    logger.error('Failed to create workflow', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Update workflow
+app.put('/workflows/:id', authenticateApiKey, async (req, res) => {
+  try {
+    const { name, description, steps, tags, isTemplate, isActive } = req.body;
+
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (steps !== undefined) updateData.steps = steps;
+    if (tags !== undefined) updateData.tags = tags;
+    if (isTemplate !== undefined) updateData.isTemplate = isTemplate;
+    if (isActive !== undefined) updateData.isActive = isActive;
+
+    const workflow = await db.updateWorkflow(req.params.id, updateData);
+    res.json({ success: true, data: workflow });
+  } catch (error) {
+    logger.error('Failed to update workflow', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete workflow
+app.delete('/workflows/:id', authenticateApiKey, async (req, res) => {
+  try {
+    await db.deleteWorkflow(req.params.id);
+    res.json({ success: true, message: 'Workflow deleted successfully' });
+  } catch (error) {
+    logger.error('Failed to delete workflow', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== EXECUTION ENDPOINTS ====================
+
+// Get all executions
+app.get('/executions', authenticateApiKey, async (req, res) => {
+  try {
+    const { workflowId, status, limit, offset } = req.query;
+    const executions = await db.getExecutions({
+      userId: 'anonymous', // Will be replaced with real user authentication later
+      workflowId,
+      status,
+      limit: limit ? parseInt(limit) : 50,
+      offset: offset ? parseInt(offset) : 0
+    });
+    res.json({ success: true, data: executions });
+  } catch (error) {
+    logger.error('Failed to get executions', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get execution by ID
+app.get('/executions/:id', authenticateApiKey, async (req, res) => {
+  try {
+    const execution = await db.getExecutionById(req.params.id);
+    if (!execution) {
+      return res.status(404).json({ success: false, error: 'Execution not found' });
+    }
+    res.json({ success: true, data: execution });
+  } catch (error) {
+    logger.error('Failed to get execution', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get execution statistics
+app.get('/executions/stats/summary', authenticateApiKey, async (req, res) => {
+  try {
+    const stats = await db.getExecutionStats('anonymous'); // Will be replaced with real user authentication later
+    res.json({ success: true, data: stats });
+  } catch (error) {
+    logger.error('Failed to get execution stats', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Execute a saved workflow
+app.post('/workflows/:id/execute', authenticateApiKey, async (req, res) => {
+  try {
+    const workflow = await db.getWorkflowById(req.params.id);
+    if (!workflow) {
+      return res.status(404).json({ success: false, error: 'Workflow not found' });
+    }
+
+    // Trigger execution by redirecting to execute-prompt with workflow steps
+    req.body.workflowId = workflow.id;
+    req.body.prompt = workflow.description || `Executing workflow: ${workflow.name}`;
+
+    // Forward to execute-prompt endpoint
+    const executionStartTime = Date.now();
+    let execution = null;
+
+    try {
+      execution = await db.createExecution({
+        prompt: req.body.prompt,
+        workflowId: workflow.id,
+        userId: 'anonymous',
+        status: 'running',
+        steps: workflow.steps,
+        triggeredBy: 'workflow'
+      });
+
+      const context = await createContext();
+      const page = await context.newPage();
+      page.setDefaultTimeout(30000);
+      page.setDefaultNavigationTimeout(30000);
+
+      const results = await executeSteps(page, workflow.steps);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      const screenshotPath = path.join(uploadsDir, `screenshot-${Date.now()}.png`);
+      await page.screenshot({ path: screenshotPath, type: 'png', fullPage: true });
+      const screenshotUrl = `/uploads/${path.basename(screenshotPath)}`;
+
+      const videoPath = await page.video().path();
+      const videoUrl = `/uploads/${path.basename(videoPath)}`;
+
+      await context.close();
+
+      await db.updateExecution(execution.id, {
+        status: 'success',
+        endTime: new Date(),
+        results,
+        screenshot: screenshotUrl,
+        videoUrl
+      });
+
+      res.json({
+        success: true,
+        message: 'Workflow executed successfully',
+        executionId: execution.id,
+        steps: workflow.steps,
+        results,
+        finalScreenshot: screenshotUrl,
+        videoUrl
+      });
+    } catch (error) {
+      if (execution) {
+        await db.updateExecution(execution.id, {
+          status: 'failed',
+          endTime: new Date(),
+          errorLog: error.message
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    logger.error('Failed to execute workflow', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 app.listen(config.port, () => {
