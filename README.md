@@ -6,14 +6,23 @@ This project provides automated browser interaction capabilities using Playwrigh
 
 ## Project Overview
 
+This is a powerful AI-driven browser automation system that converts natural language commands into browser actions.
+
 Key features:
-- Browser automation using Playwright
-- React-based frontend interface
-- Express.js backend server
-- Headless Chrome browser control
-- File upload handling
-- Cross-origin resource sharing (CORS) support
-- Uses llama3.2-vision with ollama
+- **47 Browser Actions** - Comprehensive automation capabilities (see [BROWSER_ACTIONS.md](BROWSER_ACTIONS.md))
+- **AI-Powered** - Natural language to automation steps using llama3.2-vision with Ollama
+- **Advanced Interactions** - Double-click, right-click, drag-and-drop, file upload/download
+- **Data Extraction** - Extract text, attributes, cookies, page metadata
+- **Frame & Window Management** - Switch between iframes and tabs
+- **Cookie Management** - Set, get, and clear cookies
+- **Alert Handling** - Accept, dismiss, and read alert dialogs
+- **Smart Waiting** - Wait for elements, navigation, timeouts, and URLs
+- **Screenshot Capabilities** - Full page and element-specific screenshots
+- **Logging & Monitoring** - Comprehensive logging with health checks and metrics
+- **API Authentication** - Secure API key-based authentication
+- **React Frontend** - User-friendly web interface
+- **Express Backend** - RESTful API server
+- **Human-like Behavior** - Random delays, realistic typing, mouse movements
 
 ## Prerequisites
 
@@ -230,6 +239,48 @@ Try these example prompts in the application:
 - Frontend: React application (port 3000)
 - Backend: Express.js server (port 3001)
 - Browser Automation: Playwright with Chrome
+- AI Engine: Ollama with llama3.2-vision model
+
+## Browser Actions
+
+The system supports **47 powerful browser actions** across multiple categories:
+
+| Category | Actions | Examples |
+|----------|---------|----------|
+| **Basic Interactions** | 6 actions | navigate, click, double_click, right_click, hover, drag_and_drop |
+| **Input & Forms** | 9 actions | type, clear_input, press_key, check_checkbox, select_dropdown |
+| **File Operations** | 2 actions | upload_file, download_file |
+| **Navigation** | 4 actions | go_back, go_forward, reload, close_tab |
+| **Frame & Window** | 3 actions | switch_to_iframe, switch_to_main_frame, switch_to_new_tab |
+| **Data Extraction** | 9 actions | extract_text, get_attribute, get_title, get_url, element_exists, is_visible, get_element_count |
+| **Waiting** | 4 actions | wait_for_element, wait_for_navigation, wait_for_timeout, wait_for_url |
+| **Scrolling** | 4 actions | scroll_to, scroll_to_top, scroll_to_bottom, scroll_by |
+| **Screenshots** | 2 actions | screenshot (full page), screenshot_element (specific element) |
+| **Cookie Management** | 2 actions | set_cookie, clear_cookies |
+| **Alert Handling** | 2 actions | accept_alert, dismiss_alert |
+| **Advanced** | 1 action | execute_javascript |
+
+📚 **Full Documentation:** See [BROWSER_ACTIONS.md](BROWSER_ACTIONS.md) for comprehensive documentation with examples for all 47 actions.
+
+### Example Actions
+
+```json
+// Navigate and interact
+{"action": "navigate", "value": "https://example.com", "reasoning": "Go to website"}
+{"action": "click", "selector": "button#submit", "reasoning": "Click submit button"}
+
+// Form filling
+{"action": "type", "selector": "input[name='email']", "value": "user@example.com", "reasoning": "Enter email"}
+{"action": "check_checkbox", "selector": "input#terms", "reasoning": "Accept terms"}
+
+// Data extraction
+{"action": "extract_text", "selector": "h1", "reasoning": "Get page title"}
+{"action": "get_url", "reasoning": "Get current URL"}
+
+// Advanced interactions
+{"action": "drag_and_drop", "selector": "#item", "value": "#dropzone", "reasoning": "Drag item"}
+{"action": "upload_file", "selector": "input[type='file']", "value": "/path/to/file.pdf", "reasoning": "Upload document"}
+```
 
 ## Logging and Monitoring
 

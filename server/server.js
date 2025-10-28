@@ -7,9 +7,10 @@ const path = require('path');
 const morgan = require('morgan');
 require('dotenv').config();
 
-// Import logger and metrics
+// Import logger, metrics, and database
 const logger = require('./logger');
 const metrics = require('./metrics');
+const db = require('./services/database.service');
 
 const app = express();
 
@@ -279,17 +280,81 @@ Browser Action Guidelines:
     Handle potential errors gracefully
     Prioritize reliability over speed
 
-Action Types Available:
+Action Types Available (50+ actions):
+
+BASIC INTERACTIONS:
     navigate: Go to specific URLs
-    click: Interact with page elements
+    click: Click on page elements
+    double_click: Double-click on elements
+    right_click: Right-click for context menu
+    hover: Hover over elements
+    drag_and_drop: Drag element to another element (selector=source, value=target)
+
+INPUT & FORMS:
     type: Input text into fields
-    extract_text: Retrieve page content
-    wait_for_element: Ensure page readiness
-    screenshot: Capture page state
-    execute_javascript: Run custom scripts
-    select_dropdown: Choose dropdown options
-    scroll_to: Navigate page sections
-    hover: Interact with elements
+    type_text: Type at current focus position
+    clear_input: Clear input field content
+    focus: Focus on an element
+    press_key: Press keyboard key (Enter, Escape, ArrowDown, etc.)
+    check_checkbox: Check a checkbox
+    uncheck_checkbox: Uncheck a checkbox
+    select_dropdown: Choose dropdown option
+    select_text: Select text in element
+
+FILE OPERATIONS:
+    upload_file: Upload file (selector=input, value=file path)
+    download_file: Download file by clicking element
+
+NAVIGATION:
+    go_back: Navigate back in history
+    go_forward: Navigate forward in history
+    reload: Reload current page
+    close_tab: Close current tab
+
+FRAME & WINDOW:
+    switch_to_iframe: Switch to iframe (selector=iframe)
+    switch_to_main_frame: Switch back to main frame
+    switch_to_new_tab: Click element and switch to new tab
+
+DATA EXTRACTION:
+    extract_text: Get text content from element
+    get_attribute: Get element attribute (selector=element, value=attribute name)
+    get_title: Get page title
+    get_url: Get current URL
+    element_exists: Check if element exists
+    is_visible: Check if element is visible
+    get_element_count: Count matching elements
+    get_cookies: Get all cookies
+    get_alert_text: Get alert dialog text
+
+WAITING:
+    wait_for_element: Wait for element to appear
+    wait_for_navigation: Wait for page navigation
+    wait_for_timeout: Wait for specified milliseconds
+    wait_for_url: Wait for specific URL
+
+SCROLLING:
+    scroll_to: Scroll to specific element
+    scroll_to_top: Scroll to page top
+    scroll_to_bottom: Scroll to page bottom
+    scroll_by: Scroll by pixels (value=pixels, positive=down)
+
+SCREENSHOTS:
+    screenshot: Capture full page screenshot
+    screenshot_element: Capture specific element screenshot
+
+COOKIES & STORAGE:
+    set_cookie: Set cookie (value=JSON cookie object)
+    get_cookies: Get all cookies
+    clear_cookies: Clear all cookies
+
+ALERTS & DIALOGS:
+    accept_alert: Accept alert/confirm dialog
+    dismiss_alert: Dismiss alert/confirm dialog
+    get_alert_text: Get alert message text
+
+ADVANCED:
+    execute_javascript: Run custom JavaScript code
 
 Action Execution Rules:
     Confirm each action's feasibility
@@ -322,7 +387,20 @@ Output Format:
           properties: {
             action: {
               type: 'string',
-              enum: ['navigate', 'click', 'type', 'extract_text', 'wait_for_element', 'screenshot', 'execute_javascript', 'select_dropdown', 'scroll_to', 'hover']
+              enum: [
+                'navigate', 'click', 'double_click', 'right_click', 'hover', 'drag_and_drop',
+                'type', 'type_text', 'clear_input', 'focus', 'press_key', 'check_checkbox', 'uncheck_checkbox', 'select_dropdown', 'select_text',
+                'upload_file', 'download_file',
+                'go_back', 'go_forward', 'reload', 'close_tab',
+                'switch_to_iframe', 'switch_to_main_frame', 'switch_to_new_tab',
+                'extract_text', 'get_attribute', 'get_title', 'get_url', 'element_exists', 'is_visible', 'get_element_count', 'get_cookies', 'get_alert_text',
+                'wait_for_element', 'wait_for_navigation', 'wait_for_timeout', 'wait_for_url',
+                'scroll_to', 'scroll_to_top', 'scroll_to_bottom', 'scroll_by',
+                'screenshot', 'screenshot_element',
+                'set_cookie', 'clear_cookies',
+                'accept_alert', 'dismiss_alert',
+                'execute_javascript'
+              ]
             },
             selector: { type: 'string' },
             value: { type: 'string' },
@@ -550,7 +628,312 @@ async function executeSteps(page, steps) {
         case 'screenshot':
           await takeScreenshot();
           break;
-          
+
+        // Advanced Interaction Actions
+        case 'double_click':
+          await page.waitForSelector(step.selector);
+          await page.hover(step.selector);
+          await addRandomDelay();
+          await page.dblclick(step.selector);
+          await page.waitForLoadState('networkidle');
+          await takeScreenshot();
+          break;
+
+        case 'right_click':
+          await page.waitForSelector(step.selector);
+          await page.click(step.selector, { button: 'right' });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'drag_and_drop':
+          // step.selector = source, step.value = target selector
+          await page.waitForSelector(step.selector);
+          await page.waitForSelector(step.value);
+          await page.dragAndDrop(step.selector, step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        // File Operations
+        case 'upload_file':
+          // step.selector = file input, step.value = file path
+          await page.waitForSelector(step.selector);
+          await page.setInputFiles(step.selector, step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'download_file':
+          // Click download button and wait for download
+          const [download] = await Promise.all([
+            page.waitForEvent('download'),
+            page.click(step.selector)
+          ]);
+          const downloadPath = path.join(uploadsDir, download.suggestedFilename());
+          await download.saveAs(downloadPath);
+          results.push({
+            type: 'download',
+            data: downloadPath,
+            filename: download.suggestedFilename(),
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        // Navigation Actions
+        case 'go_back':
+          await page.goBack({ waitUntil: 'networkidle' });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'go_forward':
+          await page.goForward({ waitUntil: 'networkidle' });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'reload':
+          await page.reload({ waitUntil: 'networkidle' });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'close_tab':
+          await page.close();
+          break;
+
+        // Frame/Window Switching
+        case 'switch_to_iframe':
+          // step.selector = iframe selector
+          await page.waitForSelector(step.selector);
+          const frameElement = await page.$(step.selector);
+          const frame = await frameElement.contentFrame();
+          // Store frame reference for subsequent actions
+          page._currentFrame = frame;
+          break;
+
+        case 'switch_to_main_frame':
+          page._currentFrame = null;
+          break;
+
+        case 'switch_to_new_tab':
+          // Wait for new tab to open and switch to it
+          const [newPage] = await Promise.all([
+            context.waitForEvent('page'),
+            page.click(step.selector)
+          ]);
+          await newPage.waitForLoadState('networkidle');
+          // Replace page reference
+          page = newPage;
+          await takeScreenshot();
+          break;
+
+        // Data Extraction Actions
+        case 'get_attribute':
+          // step.selector = element, step.value = attribute name
+          await page.waitForSelector(step.selector);
+          const attrValue = await page.$eval(step.selector, (el, attr) => el.getAttribute(attr), step.value);
+          results.push({
+            type: 'attribute',
+            data: attrValue,
+            attribute: step.value,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'get_title':
+          const title = await page.title();
+          results.push({
+            type: 'title',
+            data: title,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'get_url':
+          const url = page.url();
+          results.push({
+            type: 'url',
+            data: url,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'element_exists':
+          const exists = await page.$(step.selector) !== null;
+          results.push({
+            type: 'exists',
+            data: exists,
+            selector: step.selector,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'is_visible':
+          await page.waitForSelector(step.selector);
+          const visible = await page.isVisible(step.selector);
+          results.push({
+            type: 'visibility',
+            data: visible,
+            selector: step.selector,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'get_element_count':
+          const elements = await page.$$(step.selector);
+          results.push({
+            type: 'count',
+            data: elements.length,
+            selector: step.selector,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        // Keyboard and Input Actions
+        case 'press_key':
+          // step.value = key name (e.g., 'Enter', 'Escape', 'ArrowDown')
+          await page.keyboard.press(step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'type_text':
+          // Type without selector (types at current focus)
+          await page.keyboard.type(step.value, { delay: Math.random() * 100 + 50 });
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'clear_input':
+          await page.waitForSelector(step.selector);
+          await page.click(step.selector, { clickCount: 3 }); // Select all
+          await page.keyboard.press('Backspace');
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'focus':
+          await page.waitForSelector(step.selector);
+          await page.focus(step.selector);
+          await addRandomDelay();
+          break;
+
+        // Cookie Management
+        case 'set_cookie':
+          // step.value should be JSON string with cookie object
+          const cookieData = JSON.parse(step.value);
+          await context.addCookies([cookieData]);
+          break;
+
+        case 'get_cookies':
+          const cookies = await context.cookies();
+          results.push({
+            type: 'cookies',
+            data: cookies,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        case 'clear_cookies':
+          await context.clearCookies();
+          break;
+
+        // Advanced Waiting
+        case 'wait_for_navigation':
+          await page.waitForNavigation({ waitUntil: 'networkidle' });
+          await takeScreenshot();
+          break;
+
+        case 'wait_for_timeout':
+          // step.value = milliseconds
+          await page.waitForTimeout(parseInt(step.value));
+          break;
+
+        case 'wait_for_url':
+          // step.value = URL or regex pattern
+          await page.waitForURL(step.value);
+          await takeScreenshot();
+          break;
+
+        // Screenshot Actions
+        case 'screenshot_element':
+          await page.waitForSelector(step.selector);
+          const element = await page.$(step.selector);
+          const elementScreenshot = await element.screenshot();
+          const screenshotName = `element-${Date.now()}.png`;
+          const elementScreenshotPath = path.join(uploadsDir, screenshotName);
+          fs.writeFileSync(elementScreenshotPath, elementScreenshot);
+          results.push({
+            type: 'screenshot',
+            data: `data:image/png;base64,${elementScreenshot.toString('base64')}`,
+            path: `/uploads/${screenshotName}`,
+            timestamp: new Date().toISOString()
+          });
+          break;
+
+        // Selection Actions
+        case 'select_text':
+          await page.waitForSelector(step.selector);
+          await page.click(step.selector, { clickCount: 3 }); // Triple-click to select all text
+          await addRandomDelay();
+          break;
+
+        case 'check_checkbox':
+          await page.waitForSelector(step.selector);
+          await page.check(step.selector);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'uncheck_checkbox':
+          await page.waitForSelector(step.selector);
+          await page.uncheck(step.selector);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        // Scroll Actions
+        case 'scroll_to_top':
+          await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'scroll_to_bottom':
+          await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        case 'scroll_by':
+          // step.value = pixels (positive = down, negative = up)
+          await page.evaluate((pixels) => window.scrollBy({ top: parseInt(pixels), behavior: 'smooth' }), step.value);
+          await addRandomDelay();
+          await takeScreenshot();
+          break;
+
+        // Alert Handling
+        case 'accept_alert':
+          page.once('dialog', dialog => dialog.accept());
+          break;
+
+        case 'dismiss_alert':
+          page.once('dialog', dialog => dialog.dismiss());
+          break;
+
+        case 'get_alert_text':
+          page.once('dialog', dialog => {
+            results.push({
+              type: 'alert_text',
+              data: dialog.message(),
+              timestamp: new Date().toISOString()
+            });
+            dialog.dismiss();
+          });
+          break;
+
         default:
           logger.warn('Unknown action type', { action: step.action });
       }
@@ -596,9 +979,10 @@ async function executeSteps(page, steps) {
 
 app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
   const executionStartTime = Date.now();
+  let execution = null;
 
   try {
-    const { prompt } = req.body;
+    const { prompt, workflowId } = req.body;
 
     // Validate input
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
@@ -624,54 +1008,97 @@ app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
       promptPreview: prompt.substring(0, 100)
     });
 
+    // Create execution record in database
+    try {
+      execution = await db.createExecution({
+        prompt,
+        workflowId: workflowId || null,
+        userId: 'anonymous', // Will be replaced with real user authentication later
+        status: 'running',
+        steps: [],
+        triggeredBy: 'manual'
+      });
+      logger.info('Execution record created', { executionId: execution.id });
+    } catch (dbError) {
+      logger.warn('Failed to create execution record, continuing without persistence', {
+        error: dbError.message
+      });
+    }
+
     // Get steps from Ollama
     const steps = await queryOllama(prompt);
     logger.info('Executing automation steps', {
       stepsCount: steps.length,
       actions: steps.map(s => s.action)
     });
-    
+
+    // Update execution with steps
+    if (execution) {
+      try {
+        await db.updateExecution(execution.id, { steps });
+      } catch (dbError) {
+        logger.warn('Failed to update execution steps', { error: dbError.message });
+      }
+    }
+
     // Create a new context with human-like settings
     const context = await createContext();
     const page = await context.newPage();
-    
+
     // Add random delays between actions to simulate human behavior
     page.setDefaultTimeout(30000); // 30 second timeout
     page.setDefaultNavigationTimeout(30000);
-    
+
     // Execute the steps
     const results = await executeSteps(page, steps);
-    
+
     // Wait for 5 seconds after the last command
     await new Promise(resolve => setTimeout(resolve, 5000));
-    
+
     // Take and save final screenshot
     const screenshotPath = path.join(uploadsDir, `screenshot-${Date.now()}.png`);
-    await page.screenshot({ 
+    await page.screenshot({
       path: screenshotPath,
       type: 'png',
       fullPage: true
     });
     const screenshotUrl = `/uploads/${path.basename(screenshotPath)}`;
-    
+
     // Get the video path
     const videoPath = await page.video().path();
     const videoUrl = `/uploads/${path.basename(videoPath)}`;
-    
+
     // Clean up
     await context.close();
 
     const executionTime = Date.now() - executionStartTime;
     logger.info('Automation execution completed successfully', {
+      executionId: execution?.id,
       executionTime,
       stepsExecuted: steps.length,
       resultsCount: results.length
     });
     metrics.recordAutomationExecution(true, steps);
 
+    // Update execution record as successful
+    if (execution) {
+      try {
+        await db.updateExecution(execution.id, {
+          status: 'success',
+          endTime: new Date(),
+          results,
+          screenshot: screenshotUrl,
+          videoUrl
+        });
+      } catch (dbError) {
+        logger.warn('Failed to update execution as successful', { error: dbError.message });
+      }
+    }
+
     res.json({
       success: true,
       message: 'Actions executed successfully',
+      executionId: execution?.id,
       steps: steps,
       results,
       finalScreenshot: screenshotUrl,
@@ -681,14 +1108,29 @@ app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
     const executionTime = Date.now() - executionStartTime;
     logger.logError(error, {
       context: 'execute-prompt',
+      executionId: execution?.id,
       executionTime
     });
     metrics.recordAutomationExecution(false, []);
     metrics.recordError('execution_failed');
 
+    // Update execution record as failed
+    if (execution) {
+      try {
+        await db.updateExecution(execution.id, {
+          status: 'failed',
+          endTime: new Date(),
+          errorLog: error.message
+        });
+      } catch (dbError) {
+        logger.warn('Failed to update execution as failed', { error: dbError.message });
+      }
+    }
+
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      executionId: execution?.id
     });
   }
 });
@@ -716,6 +1158,222 @@ app.post('/metrics/reset', authenticateApiKey, (req, res) => {
   metrics.reset();
   logger.info('Metrics reset by user');
   res.json({ success: true, message: 'Metrics reset successfully' });
+});
+
+// ==================== WORKFLOW ENDPOINTS ====================
+
+// Get all workflows
+app.get('/workflows', authenticateApiKey, async (req, res) => {
+  try {
+    const { isTemplate, isActive, tags, search } = req.query;
+    const workflows = await db.getWorkflows({
+      userId: 'anonymous', // Will be replaced with real user authentication later
+      isTemplate: isTemplate === 'true' ? true : isTemplate === 'false' ? false : undefined,
+      isActive: isActive === 'true' ? true : isActive === 'false' ? false : undefined,
+      tags: tags ? tags.split(',') : undefined,
+      search
+    });
+    res.json({ success: true, data: workflows });
+  } catch (error) {
+    logger.error('Failed to get workflows', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get workflow by ID
+app.get('/workflows/:id', authenticateApiKey, async (req, res) => {
+  try {
+    const workflow = await db.getWorkflowById(req.params.id);
+    if (!workflow) {
+      return res.status(404).json({ success: false, error: 'Workflow not found' });
+    }
+    res.json({ success: true, data: workflow });
+  } catch (error) {
+    logger.error('Failed to get workflow', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create new workflow
+app.post('/workflows', authenticateApiKey, async (req, res) => {
+  try {
+    const { name, description, steps, tags, isTemplate } = req.body;
+
+    // Validation
+    if (!name || !steps) {
+      return res.status(400).json({
+        success: false,
+        error: 'Name and steps are required'
+      });
+    }
+
+    const workflow = await db.createWorkflow({
+      name,
+      description: description || null,
+      steps,
+      tags: tags || [],
+      isTemplate: isTemplate || false,
+      userId: 'anonymous' // Will be replaced with real user authentication later
+    });
+
+    res.status(201).json({ success: true, data: workflow });
+  } catch (error) {
+    logger.error('Failed to create workflow', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Update workflow
+app.put('/workflows/:id', authenticateApiKey, async (req, res) => {
+  try {
+    const { name, description, steps, tags, isTemplate, isActive } = req.body;
+
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (steps !== undefined) updateData.steps = steps;
+    if (tags !== undefined) updateData.tags = tags;
+    if (isTemplate !== undefined) updateData.isTemplate = isTemplate;
+    if (isActive !== undefined) updateData.isActive = isActive;
+
+    const workflow = await db.updateWorkflow(req.params.id, updateData);
+    res.json({ success: true, data: workflow });
+  } catch (error) {
+    logger.error('Failed to update workflow', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete workflow
+app.delete('/workflows/:id', authenticateApiKey, async (req, res) => {
+  try {
+    await db.deleteWorkflow(req.params.id);
+    res.json({ success: true, message: 'Workflow deleted successfully' });
+  } catch (error) {
+    logger.error('Failed to delete workflow', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== EXECUTION ENDPOINTS ====================
+
+// Get all executions
+app.get('/executions', authenticateApiKey, async (req, res) => {
+  try {
+    const { workflowId, status, limit, offset } = req.query;
+    const executions = await db.getExecutions({
+      userId: 'anonymous', // Will be replaced with real user authentication later
+      workflowId,
+      status,
+      limit: limit ? parseInt(limit) : 50,
+      offset: offset ? parseInt(offset) : 0
+    });
+    res.json({ success: true, data: executions });
+  } catch (error) {
+    logger.error('Failed to get executions', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get execution by ID
+app.get('/executions/:id', authenticateApiKey, async (req, res) => {
+  try {
+    const execution = await db.getExecutionById(req.params.id);
+    if (!execution) {
+      return res.status(404).json({ success: false, error: 'Execution not found' });
+    }
+    res.json({ success: true, data: execution });
+  } catch (error) {
+    logger.error('Failed to get execution', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get execution statistics
+app.get('/executions/stats/summary', authenticateApiKey, async (req, res) => {
+  try {
+    const stats = await db.getExecutionStats('anonymous'); // Will be replaced with real user authentication later
+    res.json({ success: true, data: stats });
+  } catch (error) {
+    logger.error('Failed to get execution stats', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Execute a saved workflow
+app.post('/workflows/:id/execute', authenticateApiKey, async (req, res) => {
+  try {
+    const workflow = await db.getWorkflowById(req.params.id);
+    if (!workflow) {
+      return res.status(404).json({ success: false, error: 'Workflow not found' });
+    }
+
+    // Trigger execution by redirecting to execute-prompt with workflow steps
+    req.body.workflowId = workflow.id;
+    req.body.prompt = workflow.description || `Executing workflow: ${workflow.name}`;
+
+    // Forward to execute-prompt endpoint
+    const executionStartTime = Date.now();
+    let execution = null;
+
+    try {
+      execution = await db.createExecution({
+        prompt: req.body.prompt,
+        workflowId: workflow.id,
+        userId: 'anonymous',
+        status: 'running',
+        steps: workflow.steps,
+        triggeredBy: 'workflow'
+      });
+
+      const context = await createContext();
+      const page = await context.newPage();
+      page.setDefaultTimeout(30000);
+      page.setDefaultNavigationTimeout(30000);
+
+      const results = await executeSteps(page, workflow.steps);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      const screenshotPath = path.join(uploadsDir, `screenshot-${Date.now()}.png`);
+      await page.screenshot({ path: screenshotPath, type: 'png', fullPage: true });
+      const screenshotUrl = `/uploads/${path.basename(screenshotPath)}`;
+
+      const videoPath = await page.video().path();
+      const videoUrl = `/uploads/${path.basename(videoPath)}`;
+
+      await context.close();
+
+      await db.updateExecution(execution.id, {
+        status: 'success',
+        endTime: new Date(),
+        results,
+        screenshot: screenshotUrl,
+        videoUrl
+      });
+
+      res.json({
+        success: true,
+        message: 'Workflow executed successfully',
+        executionId: execution.id,
+        steps: workflow.steps,
+        results,
+        finalScreenshot: screenshotUrl,
+        videoUrl
+      });
+    } catch (error) {
+      if (execution) {
+        await db.updateExecution(execution.id, {
+          status: 'failed',
+          endTime: new Date(),
+          errorLog: error.message
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    logger.error('Failed to execute workflow', { id: req.params.id, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 app.listen(config.port, () => {
