@@ -1,0 +1,57 @@
+[
+  {
+    "id": "f2b09bac-a9e3-41db-898c-ac856519a47d",
+    "name": "Google Search Test",
+    "description": "Navigate to Google and search for AI automation",
+    "steps": [
+      {
+        "action": "navigate",
+        "selector": "",
+        "value": "https://www.google.com",
+        "reasoning": "Go to Google"
+      },
+      {
+        "action": "type",
+        "selector": "textarea[name=\"q\"]",
+        "value": "AI automation",
+        "reasoning": "Enter search term"
+      },
+      {
+        "action": "press_key",
+        "selector": "",
+        "value": "Enter",
+        "reasoning": "Submit search"
+      }
+    ],
+    "tags": [
+      "google",
+      "search",
+      "test"
+    ],
+    "isTemplate": true,
+    "userId": "anonymous",
+    "createdAt": "2025-11-02T01:56:57.441Z",
+    "updatedAt": "2025-11-02T01:56:57.441Z"
+  },
+  {
+    "id": "233471f6-49d2-4f29-94a4-dad476a30b46",
+    "name": "LinkedIn Profile Check",
+    "description": "Check LinkedIn profile page",
+    "steps": [
+      {
+        "action": "navigate",
+        "selector": "",
+        "value": "https://www.linkedin.com",
+        "reasoning": "Go to LinkedIn"
+      }
+    ],
+    "tags": [
+      "linkedin",
+      "social"
+    ],
+    "isTemplate": false,
+    "userId": "anonymous",
+    "createdAt": "2025-11-02T01:57:19.501Z",
+    "updatedAt": "2025-11-02T01:57:19.501Z"
+  }
+]

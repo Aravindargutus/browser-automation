@@ -10,7 +10,9 @@ require('dotenv').config();
 // Import logger, metrics, and database
 const logger = require('./logger');
 const metrics = require('./metrics');
-const db = require('./services/database.service');
+
+// Use file-based database for testing (fallback when Prisma is unavailable)
+const db = require('./services/file-database.service');
 
 const app = express();
 
@@ -113,20 +115,39 @@ app.use('/uploads', express.static(uploadsDir));
 let browser;
 
 async function initBrowser() {
-  // Modern Chrome user agent
-  const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  if (browser) return browser;
 
-  browser = await chromium.launch({
-    headless: config.browserHeadless,
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--disable-features=IsolateOrigins,site-per-process',
-      `--window-size=${config.browserViewportWidth},${config.browserViewportHeight}`
-    ]
-  });
+  try {
+    // Modern Chrome user agent
+    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+    browser = await chromium.launch({
+      headless: config.browserHeadless,
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        `--window-size=${config.browserViewportWidth},${config.browserViewportHeight}`
+      ]
+    });
+    logger.info('Browser initialized successfully');
+  } catch (error) {
+    logger.error('Failed to initialize browser', { error: error.message });
+    logger.warn('Server will run without browser automation capabilities');
+    logger.warn('To enable browser automation, run: npx playwright install chromium');
+  }
+
+  return browser;
 }
 
 async function createContext() {
+  if (!browser) {
+    await initBrowser();
+  }
+
+  if (!browser) {
+    throw new Error('Browser not available. Please install Playwright browsers: npx playwright install chromium');
+  }
+
   return await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     viewport: { width: config.browserViewportWidth, height: config.browserViewportHeight },
@@ -168,7 +189,8 @@ async function createContext() {
   });
 }
 
-initBrowser();
+// Initialize browser on first request instead of startup
+// initBrowser();
 
 async function queryOllama(prompt) {
   const startTime = Date.now();

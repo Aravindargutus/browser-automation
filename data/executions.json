@@ -1,0 +1,55 @@
+[
+  {
+    "id": "exec-001",
+    "workflowId": "f2b09bac-a9e3-41db-898c-ac856519a47d",
+    "userId": "anonymous",
+    "prompt": "Test Google search for AI automation",
+    "status": "success",
+    "startTime": "2025-11-01T10:30:00.000Z",
+    "endTime": "2025-11-01T10:30:15.000Z",
+    "steps": [
+      {"action": "navigate", "selector": "", "value": "https://www.google.com", "reasoning": "Go to Google"},
+      {"action": "type", "selector": "textarea[name='q']", "value": "AI automation", "reasoning": "Search term"},
+      {"action": "press_key", "selector": "", "value": "Enter", "reasoning": "Submit"}
+    ],
+    "results": [
+      {"type": "screenshot", "data": "base64_data_here", "timestamp": "2025-11-01T10:30:15.000Z"}
+    ],
+    "screenshot": "/uploads/screenshot-1234567890.png",
+    "videoUrl": "/uploads/video-1234567890.webm",
+    "triggeredBy": "manual"
+  },
+  {
+    "id": "exec-002",
+    "workflowId": "f2b09bac-a9e3-41db-898c-ac856519a47d",
+    "userId": "anonymous",
+    "prompt": "Another Google search test",
+    "status": "failed",
+    "startTime": "2025-11-01T14:20:00.000Z",
+    "endTime": "2025-11-01T14:20:05.000Z",
+    "steps": [
+      {"action": "navigate", "selector": "", "value": "https://www.google.com", "reasoning": "Go to Google"}
+    ],
+    "results": [],
+    "errorLog": "Element not found: textarea[name='q']",
+    "triggeredBy": "manual"
+  },
+  {
+    "id": "exec-003",
+    "workflowId": null,
+    "userId": "anonymous",
+    "prompt": "Check LinkedIn homepage",
+    "status": "success",
+    "startTime": "2025-11-02T09:15:00.000Z",
+    "endTime": "2025-11-02T09:15:08.000Z",
+    "steps": [
+      {"action": "navigate", "selector": "", "value": "https://www.linkedin.com", "reasoning": "Go to LinkedIn"}
+    ],
+    "results": [
+      {"type": "screenshot", "data": "base64_data_here", "timestamp": "2025-11-02T09:15:08.000Z"}
+    ],
+    "screenshot": "/uploads/screenshot-9876543210.png",
+    "videoUrl": "/uploads/video-9876543210.webm",
+    "triggeredBy": "manual"
+  }
+]
