@@ -14,6 +14,10 @@ const metrics = require('./metrics');
 // Use file-based database for testing (fallback when Prisma is unavailable)
 const db = require('./services/file-database.service');
 
+// Import queue and worker
+const { automationQueue, getQueueHealth, getQueueStats, getJob } = require('./queues/automation.queue');
+const { processAutomationJob } = require('./workers/automation.worker');
+
 const app = express();
 
 // Configuration from environment variables
@@ -111,6 +115,26 @@ function authenticateApiKey(req, res, next) {
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(uploadsDir));
+
+// ==================== JOB QUEUE SETUP ====================
+
+// Queue configuration
+const queueConcurrency = parseInt(process.env.QUEUE_CONCURRENCY) || 5;
+
+// Start queue processor
+automationQueue.process(queueConcurrency, async (job) => {
+  return await processAutomationJob(job);
+});
+
+logger.info('Job queue initialized', {
+  concurrency: queueConcurrency,
+  redis: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT) || 6379
+  }
+});
+
+// ==================== BROWSER SETUP ====================
 
 let browser;
 
@@ -1000,7 +1024,6 @@ async function executeSteps(page, steps) {
 }
 
 app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
-  const executionStartTime = Date.now();
   let execution = null;
 
   try {
@@ -1025,116 +1048,81 @@ app.post('/execute-prompt', authenticateApiKey, async (req, res) => {
       });
     }
 
-    logger.info('Automation execution started', {
+    logger.info('Automation request received', {
       promptLength: prompt.length,
       promptPreview: prompt.substring(0, 100)
     });
 
-    // Create execution record in database
+    // Create execution record with "queued" status
     try {
       execution = await db.createExecution({
         prompt,
         workflowId: workflowId || null,
-        userId: 'anonymous', // Will be replaced with real user authentication later
-        status: 'running',
+        userId: 'anonymous',
+        status: 'queued',
         steps: [],
         triggeredBy: 'manual'
       });
-      logger.info('Execution record created', { executionId: execution.id });
+      logger.info('Execution record created', { executionId: execution.id, status: 'queued' });
     } catch (dbError) {
-      logger.warn('Failed to create execution record, continuing without persistence', {
-        error: dbError.message
+      logger.error('Failed to create execution record', { error: dbError.message });
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to create execution record'
       });
     }
 
     // Get steps from Ollama
     const steps = await queryOllama(prompt);
-    logger.info('Executing automation steps', {
+    logger.info('Steps generated from prompt', {
+      executionId: execution.id,
       stepsCount: steps.length,
       actions: steps.map(s => s.action)
     });
 
     // Update execution with steps
-    if (execution) {
-      try {
-        await db.updateExecution(execution.id, { steps });
-      } catch (dbError) {
-        logger.warn('Failed to update execution steps', { error: dbError.message });
+    await db.updateExecution(execution.id, { steps });
+
+    // Enqueue the job
+    const job = await automationQueue.add({
+      executionId: execution.id,
+      steps,
+      prompt
+    }, {
+      jobId: `job-${execution.id}`,
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 2000
       }
-    }
-
-    // Create a new context with human-like settings
-    const context = await createContext();
-    const page = await context.newPage();
-
-    // Add random delays between actions to simulate human behavior
-    page.setDefaultTimeout(30000); // 30 second timeout
-    page.setDefaultNavigationTimeout(30000);
-
-    // Execute the steps
-    const results = await executeSteps(page, steps);
-
-    // Wait for 5 seconds after the last command
-    await new Promise(resolve => setTimeout(resolve, 5000));
-
-    // Take and save final screenshot
-    const screenshotPath = path.join(uploadsDir, `screenshot-${Date.now()}.png`);
-    await page.screenshot({
-      path: screenshotPath,
-      type: 'png',
-      fullPage: true
     });
-    const screenshotUrl = `/uploads/${path.basename(screenshotPath)}`;
 
-    // Get the video path
-    const videoPath = await page.video().path();
-    const videoUrl = `/uploads/${path.basename(videoPath)}`;
+    // Update execution status to "running"
+    await db.updateExecution(execution.id, { status: 'running' });
 
-    // Clean up
-    await context.close();
-
-    const executionTime = Date.now() - executionStartTime;
-    logger.info('Automation execution completed successfully', {
-      executionId: execution?.id,
-      executionTime,
-      stepsExecuted: steps.length,
-      resultsCount: results.length
+    logger.info('Job enqueued', {
+      jobId: job.id,
+      executionId: execution.id,
+      queuePosition: await job.getState()
     });
-    metrics.recordAutomationExecution(true, steps);
 
-    // Update execution record as successful
-    if (execution) {
-      try {
-        await db.updateExecution(execution.id, {
-          status: 'success',
-          endTime: new Date(),
-          results,
-          screenshot: screenshotUrl,
-          videoUrl
-        });
-      } catch (dbError) {
-        logger.warn('Failed to update execution as successful', { error: dbError.message });
-      }
-    }
-
+    // Return immediately with job info
     res.json({
       success: true,
-      message: 'Actions executed successfully',
-      executionId: execution?.id,
+      message: 'Automation job enqueued successfully',
+      executionId: execution.id,
+      jobId: job.id,
+      status: 'queued',
       steps: steps,
-      results,
-      finalScreenshot: screenshotUrl,
-      videoUrl: videoUrl
+      statusUrl: `/executions/${execution.id}`,
+      jobUrl: `/jobs/${job.id}`
     });
   } catch (error) {
-    const executionTime = Date.now() - executionStartTime;
     logger.logError(error, {
       context: 'execute-prompt',
-      executionId: execution?.id,
-      executionTime
+      executionId: execution?.id
     });
-    metrics.recordAutomationExecution(false, []);
-    metrics.recordError('execution_failed');
+    metrics.recordError('job_enqueue_failed');
 
     // Update execution record as failed
     if (execution) {
@@ -1180,6 +1168,165 @@ app.post('/metrics/reset', authenticateApiKey, (req, res) => {
   metrics.reset();
   logger.info('Metrics reset by user');
   res.json({ success: true, message: 'Metrics reset successfully' });
+});
+
+// ==================== JOB QUEUE ENDPOINTS ====================
+
+// Get job status by ID
+app.get('/jobs/:jobId', authenticateApiKey, async (req, res) => {
+  try {
+    const job = await getJob(req.params.jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        error: 'Job not found'
+      });
+    }
+
+    const state = await job.getState();
+    const progress = job._progress || 0;
+    const result = job.returnvalue;
+    const failedReason = job.failedReason;
+
+    res.json({
+      success: true,
+      data: {
+        jobId: job.id,
+        executionId: job.data.executionId,
+        state,
+        progress,
+        attemptsMade: job.attemptsMade,
+        timestamp: job.timestamp,
+        processedOn: job.processedOn,
+        finishedOn: job.finishedOn,
+        result,
+        failedReason
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to get job', { jobId: req.params.jobId, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Cancel/Remove a job
+app.delete('/jobs/:jobId', authenticateApiKey, async (req, res) => {
+  try {
+    const job = await getJob(req.params.jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        error: 'Job not found'
+      });
+    }
+
+    const state = await job.getState();
+
+    // Only allow cancelling waiting or active jobs
+    if (state === 'waiting' || state === 'active' || state === 'delayed') {
+      await job.remove();
+
+      // Update execution as cancelled
+      if (job.data.executionId) {
+        try {
+          await db.updateExecution(job.data.executionId, {
+            status: 'cancelled',
+            endTime: new Date()
+          });
+        } catch (dbError) {
+          logger.warn('Failed to update execution status', { error: dbError.message });
+        }
+      }
+
+      logger.info('Job cancelled', { jobId: job.id, executionId: job.data.executionId });
+
+      res.json({
+        success: true,
+        message: 'Job cancelled successfully',
+        jobId: job.id
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: `Cannot cancel job in state: ${state}`
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to cancel job', { jobId: req.params.jobId, error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get all jobs (with filtering)
+app.get('/jobs', authenticateApiKey, async (req, res) => {
+  try {
+    const { state, limit = 50 } = req.query;
+
+    let jobs;
+    if (state) {
+      jobs = await automationQueue.getJobs([state], 0, parseInt(limit) - 1);
+    } else {
+      jobs = await automationQueue.getJobs(
+        ['waiting', 'active', 'completed', 'failed', 'delayed'],
+        0,
+        parseInt(limit) - 1
+      );
+    }
+
+    const jobsData = await Promise.all(jobs.map(async (job) => {
+      const jobState = await job.getState();
+      return {
+        jobId: job.id,
+        executionId: job.data.executionId,
+        state: jobState,
+        progress: job._progress || 0,
+        timestamp: job.timestamp,
+        processedOn: job.processedOn,
+        finishedOn: job.finishedOn,
+        attemptsMade: job.attemptsMade,
+        failedReason: job.failedReason
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: jobsData,
+      count: jobsData.length
+    });
+  } catch (error) {
+    logger.error('Failed to get jobs', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get queue statistics
+app.get('/queue/stats', authenticateApiKey, async (req, res) => {
+  try {
+    const stats = await getQueueStats();
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    logger.error('Failed to get queue stats', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get queue health
+app.get('/queue/health', async (req, res) => {
+  try {
+    const health = await getQueueHealth();
+    res.json({
+      success: true,
+      data: health
+    });
+  } catch (error) {
+    logger.error('Failed to get queue health', { error: error.message });
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // ==================== WORKFLOW ENDPOINTS ====================
